@@ -31,6 +31,7 @@ const LAST = 6; // индекс последнего дня недели (Вс)
 const uid = () => Math.random().toString(36).slice(2, 10);
 const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
 const toHHMM = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+const nowRounded = () => { const d = new Date(); let m = d.getHours() * 60 + d.getMinutes(); m = Math.round(m / 5) * 5; return toHHMM(m % 1440); };
 const addHour = (t) => toHHMM(Math.min(toMin(t) + 60, 23 * 60 + 59));
 const fmtLeft = (m) => m >= 60 ? `${Math.floor(m / 60)} ч ${Math.round(m % 60)} мин` : m >= 1 ? `${Math.round(m)} мин` : "меньше минуты";
 function plural(n, one, few, many) {
@@ -50,7 +51,13 @@ const CATS = {
 const CAT_ORDER = ["iu", "in", "nu", "nn"];
 const catKey = (k) => (CATS[k] ? k : "in");   // старые ярлыки (Работа/Отдых/Личное) → «Важно»
 const cat_ = (k) => CATS[catKey(k)];
-const STUCK = 3;        // столько переносов = дело застряло
+const MOVE_LIMIT = 2;   // жёсткий потолок переносов одного дела — дальше только «сделано» или «убрать»
+const REASONS = {
+  time:  "Не успел",
+  avoid: "Не хотел",
+  forgot: "Забыл",
+  urgent: "Появилось важнее",
+};
 const RING_W = 2.5;    // толщина кольца прогресса на капсуле дня
 const NOTE_MAX = 15;   // символов в заметке, пробелы не в счёт
 const noteLen = (v) => (v || "").replace(/\s/g, "").length;
@@ -138,6 +145,7 @@ function parseVoice(text) {
 // ---------- Иконки (SVG, монохром) ----------
 const I = {
   cal: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>),
+  clock: () => (<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>),
   rep: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 23-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>),
   bell: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>),
   bellOff: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.6 3a6 6 0 0 1 9.4 5c0 4 1 6 2 7H9"/><path d="M6 8c0 7-3 9-3 9h11"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><line x1="2" y1="2" x2="22" y2="22"/></svg>),
@@ -158,7 +166,7 @@ const I = {
 };
 
 // ---------- Приложение ----------
-function WeekPlanner() {
+export default function WeekPlanner() {
   const emptyDays = () => ({ 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] });
   const [days, setDays] = useState(emptyDays());
   const [backlog, setBacklog] = useState([]);
@@ -177,22 +185,35 @@ function WeekPlanner() {
   const [sel, setSel] = useState(todayIdx);
   const [filter, setFilter] = useState("all");
   const [view, setView] = useState("day"); // 'day' | 'grid' | 'stats'
+  const [statsView, setStatsView] = useState("week"); // 'week' | 'heatmap'
   const [routines, setRoutines] = useState([]);      // повторяющиеся дела
   const [applied, setApplied] = useState([]);        // id повторов, уже применённых на этой неделе
   const [history, setHistory] = useState({});        // 'YYYY-MM-DD' -> {done, total} для стрика
-  const [showRoutines, setShowRoutines] = useState(false);
+  // Причины переноса: { reasonKey: { catKey: count } }. Отдельный ключ хранения — намеренно не завязан
+  // на общий persist(), у которого уже 13 мест вызова с позиционными аргументами; протаскивать туда
+  // ещё один параметр — риск тихо потерять данные там, где забудут его передать.
+  const [reasonStats, setReasonStats] = useState({});
+  const [lastExportAt, setLastExportAt] = useState(null);   // мс времени последнего экспорта — свой ключ, тот же принцип, что у reasonStats
+  const bumpReason = (reasonKey, catK) => {
+    setReasonStats((prev) => {
+      const next = { ...prev, [reasonKey]: { ...(prev[reasonKey] || {}) } };
+      next[reasonKey][catK] = (next[reasonKey][catK] || 0) + 1;
+      try { window.storage.set("myday:reasons", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  };
   const [notifOn, setNotifOn] = useState(false);
   const notifiedRef = useRef({});
-  const [rTitle, setRTitle] = useState("");
-  const [rFrom, setRFrom] = useState("");
-  const [rTo, setRTo] = useState("");
-  const [rCat, setRCat] = useState("other");
-  const [rDays, setRDays] = useState([0, 1, 2, 3, 4]);
+  const [moveFor, setMoveFor] = useState(null);       // { id, fromIdx, title, cat } — открыт выбор даты переноса
+  const [moveReason, setMoveReason] = useState(null);  // причина текущего переноса — необязательна
+  const [timePicker, setTimePicker] = useState(null); // 'add' | 'edit' | null — контекст открытой модалки времени
+  const [tpFrom, setTpFrom] = useState("");
+  const [tpTo, setTpTo] = useState("");
 
   const [now, setNow] = useState(new Date());
   const [review, setReview] = useState(null);
   const [title, setTitle] = useState("");
-  const [from, setFrom] = useState("");
+  const [from, setFrom] = useState(nowRounded);   // по умолчанию — сейчас, округлено до 5 мин
   const [to, setTo] = useState("");
   const [cat, setCat] = useState("in");
   const [listening, setListening] = useState(false);
@@ -335,6 +356,14 @@ function WeekPlanner() {
 
     const rl = (store && store.routines) || [];
     const h = (store && store.history) || {};
+    try {
+      const rr = await window.storage.get("myday:reasons");
+      if (rr && rr.value) setReasonStats(JSON.parse(rr.value));
+    } catch (e) { /* нет ещё сохранённых причин — это нормально при первом запуске */ }
+    try {
+      const le = await window.storage.get("myday:lastExport");
+      if (le && le.value) setLastExportAt(Number(le.value));
+    } catch (e) { /* ещё не экспортировал — тоже нормально */ }
     const no = !!(store && store.notifOn) && typeof Notification !== "undefined" && Notification.permission === "granted";
     const st = { ...DEFAULT_SETTINGS, ...((store && store.settings) || {}) };
     const allWeeks = (store && store.weeks) || {};
@@ -355,19 +384,20 @@ function WeekPlanner() {
   useEffect(() => { loadAndRoll(); }, []);
 
   useEffect(() => {
-    const anyOpen = showSettings || showRoutines || showCalendar || !!review || !!editFor;
+    const anyOpen = showSettings || showCalendar || !!review || !!editFor || !!moveFor || !!timePicker;
     if (!anyOpen) return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
       if (showSettings) setShowSettings(false);
-      else if (showRoutines) setShowRoutines(false);
       else if (showCalendar) setShowCalendar(false);
       else if (review) setReview(null);
       else if (editFor) setEditFor(null);
+      else if (moveFor) setMoveFor(null);
+      else if (timePicker) setTimePicker(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showSettings, showRoutines, showCalendar, review, editFor]);
+  }, [showSettings, showCalendar, review, editFor, moveFor, timePicker]);
 
   // Каждую секунду проверяем: не наступил ли новый день, пока вкладка открыта.
   // Ref всегда указывает на свежую версию — иначе setInterval «застрял» бы на дате монтирования.
@@ -429,7 +459,7 @@ function WeekPlanner() {
       setDayTasks(dayIdx, [...days[dayIdx], { id: uid(), title: name, from: f, to: end, cat: c, done: false, carried: false }]);
       if (clash) showToast(`Пересекается с «${clash.title}» — добавлено всё равно`);
     }
-    setTitle(""); setFrom(""); setTo("");
+    setTitle(""); setFrom(nowRounded()); setTo("");
   };
 
   const startVoice = () => {
@@ -472,27 +502,6 @@ function WeekPlanner() {
     });
   }, [now, notifOn]);
 
-  // ---------- Повторяющиеся дела ----------
-  const addRoutine = () => {
-    const name = rTitle.trim();
-    if (!name || !rFrom || !rDays.length) return;
-    const r = {
-      id: uid(), title: name, cat: rCat, from: rFrom,
-      to: rTo && toMin(rTo) > toMin(rFrom) ? rTo : addMinutes(rFrom, settings.defaultDuration),
-      days: [...rDays].sort((a, b) => a - b),
-    };
-    const rl = [...routines, r];
-    const startIdx = isCurrentWeek ? todayIdx : 0;
-    const { dd, newApplied } = applyRoutines(days, [r], applied, startIdx);
-    setRoutines(rl); setDays(dd); setApplied(newApplied);
-    persist(dd, backlog, closed, newApplied, rl);
-    setRTitle(""); setRFrom(""); setRTo("");
-  };
-  const delRoutine = (id) => {
-    const rl = routines.filter((r) => r.id !== id);
-    setRoutines(rl); persist(days, backlog, closed, applied, rl);
-  };
-
   // ---------- Перенос дела перетаскиванием в сетке ----------
   const moveTask = (id, fromIdx, toIdx, nf, nt) => {
     const task = (days[fromIdx] || []).find((t) => t.id === id);
@@ -522,6 +531,9 @@ function WeekPlanner() {
     a.href = url; a.download = `moya-nedelya-${currentWeekKey}.json`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    const now = Date.now();
+    setLastExportAt(now);
+    try { window.storage.set("myday:lastExport", String(now)); } catch (e) {}
   };
 
   const importData = (file) => {
@@ -594,7 +606,7 @@ function WeekPlanner() {
 
   const list = days[sel] || [];
   const shown = filter === "all" ? list : list.filter((t) => catKey(t.cat) === filter);
-  const stuckToday = list.filter((t) => (t.moves || 0) >= STUCK && !t.done);
+  const stuckToday = list.filter((t) => (t.moves || 0) >= MOVE_LIMIT && !t.done);
   const todayList = isCurrentWeek ? (days[todayIdx] || []) : [];
   const expired = todayList.find((t) => !t.done && !t.asked && nowMin >= toMin(t.to)) || null;
   const activeTask = selIsToday ? list.find((t) => status(t, sel) === "active") : null;
@@ -613,6 +625,15 @@ function WeekPlanner() {
     let n = 0; const d = new Date();
     if (!history[dateKey(d)]) d.setDate(d.getDate() - 1); // сегодня ещё не закрыт — считаем со вчера
     while (history[dateKey(d)]) { n++; d.setDate(d.getDate() - 1); }
+    return n;
+  })();
+  // Отдельная метрика: сколько дней подряд НИ ОДНО дело не упёрлось в лимит переносов.
+  // Это не то же самое, что streak — можно закрывать день каждый раз, просто удаляя всё через «убрать»,
+  // и обычный стрик этого не заметит. Эта метрика — про честность, а не про закрытие дня как таковое.
+  const cleanStreak = (() => {
+    let n = 0; const d = new Date();
+    if (!history[dateKey(d)]) d.setDate(d.getDate() - 1);
+    while (history[dateKey(d)] && !history[dateKey(d)].stuck) { n++; d.setDate(d.getDate() - 1); }
     return n;
   })();
   const catMins = {};
@@ -638,7 +659,9 @@ function WeekPlanner() {
       });
     }
   };
-  // Свайп по карточке: влево — выполнено/снять, вправо — перенести на завтра
+  // Свайп по карточке: подпись слева/справа обнажается той стороной, куда УЕЗЖАЕТ карточка —
+  // вправо открывает «Готово» (была слева), влево открывает «Перенести» (была справа).
+  const canMove = (t) => (t.moves || 0) < MOVE_LIMIT;
   const startSwipe = (ev, t) => {
     if (ev.target.closest("button, input")) return;   // не мешаем кнопкам внутри карточки
     const info = { id: t.id, x0: ev.clientX, y0: ev.clientY, dx: 0, lock: null };
@@ -656,32 +679,84 @@ function WeekPlanner() {
       window.removeEventListener("pointerup", up);
       const i = swipeRef.current; swipeRef.current = null; setSwipe(null);
       if (!i || i.lock !== "x") return;
-      if (i.dx <= -70) toggle(i.id);                  // влево — готово
-      else if (i.dx >= 70) moveToNextDay(i.id);       // вправо — на завтра
+      if (i.dx >= 70) toggle(i.id);                                  // вправо — готово
+      else if (i.dx <= -70) {                                        // влево — перенести
+        if (!canMove(t)) {
+          showToast(`«${t.title}» уже переносили ${MOVE_LIMIT} раза — больше нельзя. Реши: сделано или оставь как есть.`);
+          return;
+        }
+        setMoveFor({ id: t.id, fromIdx: sel, title: t.title, cat: catKey(t.cat) });
+      }
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
 
-  // Перенос дела на следующий день (в т.ч. Вс → Пн следующей недели)
-  const moveToNextDay = (id, fromIdx = sel) => {
+  // Перенос дела на конкретную выбранную дату (в т.ч. через границу недели).
+  // info передаётся явно (а не читается из moveFor) — иначе после setMoveFor() в том же тике
+  // React ещё не успел бы обновить состояние, и функция бы «не увидела» свежее значение.
+  // «Повторить» — лёгкий дубликат дела на другой день, без полноценного конструктора повторяющихся правил
+  // (тот был убран как мёртвый код). Просто копия с тем же названием/временем/категорией.
+  const repeatTask = (t, targetDate) => {
+    const newTask = { id: uid(), title: t.title, from: t.from, to: t.to, cat: t.cat, done: false };
+    const targetWeekKey = dateKey(mondayOf(targetDate));
+    const targetDayIdx = (targetDate.getDay() + 6) % 7;
+    const label = `${DAY_FULL[targetDayIdx]}, ${targetDate.getDate()} ${MONTHS[targetDate.getMonth()]}`;
+    const clashCheck = (list) => hasOverlap(list, newTask.from, newTask.to, null);
+
+    if (targetWeekKey === viewMondayKey) {
+      const clash = clashCheck(days[targetDayIdx] || []);
+      const d = { ...days, [targetDayIdx]: [...(days[targetDayIdx] || []), newTask].sort((a, b) => toMin(a.from) - toMin(b.from)) };
+      setDays(d); persist(d);
+      showToast(clash ? `Повторено на ${label} — пересекается с «${clash.title}»` : `Повторено на ${label}`);
+    } else {
+      const nw = ensureWeek(weeks[targetWeekKey], targetWeekKey, routines);
+      const clash = clashCheck(nw.days[targetDayIdx] || []);
+      nw.days[targetDayIdx] = [...(nw.days[targetDayIdx] || []), newTask].sort((a, b) => toMin(a.from) - toMin(b.from));
+      persist(days, backlog, closed, applied, routines, history, notifOn, settings, { [targetWeekKey]: nw });
+      showToast(clash ? `Повторено на ${label} — пересекается с «${clash.title}»` : `Повторено на ${label}`);
+    }
+    setEditFor(null);
+  };
+
+  const confirmMove = (info, targetDate, reasonKey = null) => {
+    if (!info) return;
+    const { id, fromIdx } = info;
     const src = days[fromIdx] || [];
-    const t = src.find((x) => x.id === id); if (!t) return;
+    const t = src.find((x) => x.id === id);
+    if (!t) { setMoveFor(null); return; }
     const rest = src.filter((x) => x.id !== id);
     const moved = { ...t, done: false, carried: true, asked: false, ext: 0, moves: (t.moves || 0) + 1 };
-    const sel = fromIdx;
-    if (sel < LAST) {
-      const d = { ...days, [sel]: rest, [sel + 1]: [...days[sel + 1], moved].sort((a, b) => toMin(a.from) - toMin(b.from)) };
+    const targetWeekKey = dateKey(mondayOf(targetDate));
+    const targetDayIdx = (targetDate.getDay() + 6) % 7;
+    const label = `${DAY_FULL[targetDayIdx]}, ${targetDate.getDate()} ${MONTHS[targetDate.getMonth()]}`;
+
+    if (targetWeekKey === viewMondayKey) {
+      const d = { ...days, [fromIdx]: rest, [targetDayIdx]: [...days[targetDayIdx], moved].sort((a, b) => toMin(a.from) - toMin(b.from)) };
       setDays(d); persist(d);
-      showToast(`Перенесено на ${DAY_NAMES[sel + 1]}`);
     } else {
-      const nk = mondayKeyOffset(viewMondayKey, 1);
-      const nw = ensureWeek(weeks[nk], nk, routines);
-      nw.days[0] = [...nw.days[0], moved].sort((a, b) => toMin(a.from) - toMin(b.from));
-      const d = { ...days, [sel]: rest };
-      setDays(d); persist(d, backlog, closed, applied, routines, history, notifOn, settings, { [nk]: nw });
-      showToast("Перенесено на понедельник");
+      const nw = ensureWeek(weeks[targetWeekKey], targetWeekKey, routines);
+      nw.days[targetDayIdx] = [...nw.days[targetDayIdx], moved].sort((a, b) => toMin(a.from) - toMin(b.from));
+      const d = { ...days, [fromIdx]: rest };
+      setDays(d); persist(d, backlog, closed, applied, routines, history, notifOn, settings, { [targetWeekKey]: nw });
     }
+    if (reasonKey) bumpReason(reasonKey, catKey(t.cat));
+    showToast(`Перенесено на ${label}`);
+    setMoveFor(null);
+  };
+
+  // Модалка выбора времени: открывается кнопкой-триггером из панели добавления или редактирования.
+  // По умолчанию — текущее время и +1 час, как просил пользователь; можно крутить руками (нативное поле)
+  // или прибавлять готовыми кнопками снизу.
+  const openTimePicker = (ctx) => {
+    const f = ctx === "add" ? (from || nowRounded()) : (eFrom || nowRounded());
+    const t = ctx === "add" ? (to || addMinutes(f, 60)) : (eTo || addMinutes(f, 60));
+    setTpFrom(f); setTpTo(t); setTimePicker(ctx);
+  };
+  const applyTimePicker = () => {
+    if (timePicker === "add") { setFrom(tpFrom); setTo(tpTo); }
+    else if (timePicker === "edit") { setEFrom(tpFrom); setETo(tpTo); }
+    setTimePicker(null);
   };
 
   const openEdit = (t, focusNote = false) => {
@@ -740,7 +815,7 @@ function WeekPlanner() {
   // ---------- Опрос ----------
   const openReview = () => {
     const choices = {};
-    list.forEach((t) => { choices[t.id] = t.done ? "done" : "tomorrow"; });
+    list.forEach((t) => { choices[t.id] = t.done ? "done" : (canMove(t) ? "tomorrow" : "keep"); });
     setReview({ choices });
   };
   const confirmReview = () => {
@@ -748,7 +823,9 @@ function WeekPlanner() {
     list.forEach((t) => {
       const c = review.choices[t.id];
       if (c === "done") stay.push({ ...t, done: true });
-      else if (c === "tomorrow") move.push({ ...t, done: false, carried: true, moves: (t.moves || 0) + 1 });
+      else if (c === "tomorrow" && canMove(t)) move.push({ ...t, done: false, carried: true, moves: (t.moves || 0) + 1 });
+      else if (c === "drop") { /* явный выбор — не переносим никуда */ }
+      else stay.push({ ...t, done: false });   // "keep" (лимит исчерпан) или запасной случай — остаётся как есть, не удаляется
     });
     const d = { ...days, [sel]: stay };
     let extra = null;
@@ -762,8 +839,10 @@ function WeekPlanner() {
       extra = { [nk]: nextWk };
     }
     const c = { ...closed, [sel]: true };
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 120);
-    const rawHist = { ...history, [dateKey(dayDate(sel))]: { done: stay.length, total: list.length } };
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 400); // с запасом больше года — полугодовые срезы не должны упираться в обрезку
+    const doneCount = stay.filter((t) => t.done).length;             // было stay.length — по ошибке считало и «keep»-случаи как выполненные
+    const stuckLeft = stay.some((t) => (t.moves || 0) >= MOVE_LIMIT && !t.done);
+    const rawHist = { ...history, [dateKey(dayDate(sel))]: { done: doneCount, total: list.length, stuck: stuckLeft } };
     const h = Object.fromEntries(Object.entries(rawHist).filter(([k]) => new Date(k) >= cutoff));
     setDays(d); setClosed(c); setHistory(h); setReview(null);
     persist(d, backlog, c, applied, routines, h, notifOn, settings, extra);
@@ -806,7 +885,8 @@ function WeekPlanner() {
         *{box-sizing:border-box;margin:0;padding:0}
         .app{min-height:100vh;color:var(--text);background:var(--bg);
           font-family:'Inter',-apple-system,sans-serif;font-feature-settings:'cv11';
-          display:flex;justify-content:center;padding:26px 14px 120px}
+          display:flex;justify-content:center;
+          padding:calc(26px + env(safe-area-inset-top, 0px)) 14px 120px}
         .shell{width:100%;max-width:600px}
         .eyebrow{color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-top:4px}
         h1{font-weight:800;font-size:clamp(22px,5.5vw,30px);letter-spacing:-0.02em}
@@ -998,6 +1078,14 @@ function WeekPlanner() {
           border-radius:16px;background:rgba(232,160,160,.06);border:1px solid rgba(232,160,160,.28);font-size:13px}
         .nudge b{color:var(--danger);font-size:13.5px}
         .nudge span{color:var(--muted);line-height:1.45}
+        .insight{display:flex;align-items:flex-start;gap:9px;margin-bottom:16px;padding:12px 15px;
+          border-radius:16px;background:var(--acc-08);border:1px solid var(--acc-22);font-size:13px}
+        .insight svg{flex:none;margin-top:1px;color:var(--acc-text)}
+        .insight span{color:var(--text);line-height:1.45}
+        .export-nudge{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;
+          padding:12px 15px;border-radius:16px;background:var(--card2);border:1px solid var(--line);font-size:12.5px}
+        .export-nudge span{flex:1;min-width:180px;color:var(--muted);line-height:1.45}
+        .export-nudge .ghost{flex:none;font-size:12.5px;padding:7px 12px}
         .badge.stuck{color:var(--danger);border-color:rgba(232,160,160,.45);background:rgba(232,160,160,.10)}
         .s-proc{display:flex;gap:8px;margin-bottom:10px}
         .s-tile{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:14px;
@@ -1020,6 +1108,28 @@ function WeekPlanner() {
         .ask-acts .cta,.ask-acts .ghost{width:100%;justify-content:center}
         .ask-note{margin-top:14px;font-size:11.5px;color:var(--muted);line-height:1.4}
 
+        /* Выбор дня переноса */
+        .reason-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+        .reason-stats{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+        .reason-stats span{background:var(--card2);border:1px solid var(--line);border-radius:99px;
+          padding:6px 11px;font-size:12.5px;color:var(--muted)}
+        .reason-stats span b{color:var(--text);font-variant-numeric:tabular-nums}
+        .reason-chip{background:var(--card2);border:1px solid var(--line);border-radius:99px;
+          color:var(--muted);font-family:inherit;font-weight:600;font-size:12.5px;padding:7px 12px;cursor:pointer;
+          transition:border-color .15s,background .15s,color .15s}
+        .reason-chip:hover{border-color:var(--line2)}
+        .reason-chip.on{background:var(--acc);color:var(--cta-text);border-color:var(--acc)}
+        .move-days{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:16px 0}
+        .move-day{background:var(--card2);border:1px solid var(--line);border-radius:12px;
+          padding:10px 4px;display:flex;flex-direction:column;align-items:center;gap:1px;
+          color:var(--text);font-family:inherit;cursor:pointer;transition:border-color .15s}
+        .move-day:hover{border-color:var(--acc)}
+        .move-day b{font-size:13px;font-weight:700}
+        .move-day span{font-size:10.5px;color:var(--muted)}
+        .seg-disabled{flex:1;min-width:96px;border:1px dashed var(--line);background:transparent;
+          color:var(--muted);font-family:inherit;font-size:12px;font-weight:600;padding:8px 10px;
+          border-radius:10px;cursor:not-allowed;opacity:.7}
+
         .live{margin-top:9px}
         .live-info{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:6px}
         .live-info b{color:var(--acc)}
@@ -1027,7 +1137,7 @@ function WeekPlanner() {
         .live-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width 1s linear}
 
         .empty{text-align:center;color:var(--muted);padding:26px 18px;border:1px dashed var(--line);
-          border-radius:20px;font-size:13.5px}
+          border-radius:20px;font-size:13.5px;margin-bottom:16px}
         .empty b{color:var(--text);display:block;margin-bottom:6px;font-size:16px}
 
         .add{width:100%;margin-top:24px;
@@ -1041,6 +1151,27 @@ function WeekPlanner() {
         .add input[type=time]{flex:none;background:var(--card2);border:1px solid var(--line);
           border-radius:12px;color:var(--text);font-family:inherit;font-size:13.5px;padding:8px 8px;color-scheme:var(--cs)}
         .add .sep{align-self:center;color:var(--muted);font-size:13px}
+        /* Компактная кнопка-триггер времени в панелях — само окно выбора отдельной модалкой */
+        .time-trigger{width:100%;display:flex;align-items:center;gap:8px;
+          background:var(--card2);border:1px solid var(--line);border-radius:14px;
+          color:var(--text);font-family:inherit;font-weight:600;font-size:14px;padding:11px 13px;cursor:pointer;
+          transition:border-color .15s}
+        .time-trigger:hover{border-color:var(--line2)}
+        .time-trigger svg{flex:none;color:var(--muted)}
+
+        /* Модалка выбора времени */
+        .tp-modal{max-width:340px}
+        .tp-fields{display:flex;gap:10px;margin:16px 0}
+        .tp-field{flex:1;display:flex;flex-direction:column;gap:6px}
+        .tp-field span{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+        .tp-field input{background:var(--card2);border:1px solid var(--line);border-radius:12px;
+          color:var(--text);font-family:inherit;font-size:22px;font-weight:700;padding:12px 10px;
+          text-align:center;font-variant-numeric:tabular-nums;color-scheme:var(--cs)}
+        .tp-plus{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+        .dur-chip{background:var(--card2);border:1px solid var(--line);border-radius:99px;
+          color:var(--muted);font-family:inherit;font-weight:600;font-size:12.5px;padding:7px 12px;cursor:pointer;
+          transition:border-color .15s,color .15s}
+        .dur-chip:hover{border-color:var(--acc);color:var(--acc-text)}
         .mic{flex:none;width:42px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);
           border-radius:999px;background:var(--card2);color:var(--text);cursor:pointer;transition:border-color .15s}
         .mic:hover{border-color:var(--line2)}
@@ -1124,13 +1255,13 @@ function WeekPlanner() {
         .daycard{padding:14px 14px 10px;margin-bottom:18px}
 
         .dg-head{display:flex;align-items:center;gap:8px;margin-bottom:14px}
-        .dg-title{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:1px;
-          background:var(--card2);border:1px solid var(--line);border-radius:99px;padding:8px 12px;
+        .dg-title{flex:1;min-width:0;display:flex;flex-direction:row;align-items:baseline;justify-content:center;gap:6px;
+          background:var(--card2);border:1px solid var(--line);border-radius:99px;padding:9px 12px;
           font-family:inherit;cursor:pointer;transition:border-color .15s}
         .dg-title:hover{border-color:var(--line2)}
-        .dg-title b{font-size:14px;font-weight:700;color:var(--text);text-transform:capitalize}
+        .dg-title b{font-size:14px;font-weight:700;color:var(--text);text-transform:capitalize;white-space:nowrap}
         .dg-title b.on{color:var(--acc-text)}
-        .dg-title span{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+        .dg-title span{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 
         .dg-body{display:flex;gap:0}
         .dg-hours{position:relative;width:46px;flex:none}
@@ -1160,8 +1291,44 @@ function WeekPlanner() {
         .grid-hint{margin-top:8px;font-size:11.5px;color:var(--muted);text-align:center}
 
         /* Статистика */
+        /* Переключатель видов статистики */
+        .sv-tabs{display:flex;gap:6px;margin-bottom:16px}
+        .sv-tabs button{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:99px;
+          color:var(--muted);font-family:inherit;font-weight:600;font-size:13px;padding:8px 10px;cursor:pointer;
+          transition:background .15s,color .15s,border-color .15s}
+        .sv-tabs button.on{background:var(--acc);color:var(--cta-text);border-color:var(--acc)}
+
+        /* Теплокарта */
+        .heatmap{display:flex;flex-direction:column;gap:14px}
+        .hm-top{font-size:13.5px;color:var(--muted)}
+        .hm-top b{color:var(--text);font-size:20px;font-weight:800;margin-right:6px}
+        .hm-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+        .hm-grid{display:flex;gap:3px;width:max-content}
+        .hm-col{display:flex;flex-direction:column;gap:3px}
+        .hm-cell{width:13px;height:13px;border-radius:3px;background:var(--track)}
+        .hm-cell.hm-future{background:transparent}
+        .hm-cell.hm-today{outline:1.5px solid var(--acc);outline-offset:1px}
+        .hm-legend{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)}
+        .hm-legend i{width:11px;height:11px;border-radius:3px;display:block}
+
+        /* Круговая диаграмма */
+        .pie-wrap{display:flex;flex-direction:column;align-items:center;gap:18px}
+        .pie-svg{width:180px;height:180px;flex:none}
+        .pie-center-num{font-size:22px;font-weight:800;fill:var(--text);font-family:inherit}
+        .pie-center-lbl{font-size:10px;fill:var(--muted);font-family:inherit}
+        .pie-legend{width:100%;display:flex;flex-direction:column;gap:9px}
+        .pie-row{display:flex;align-items:center;gap:9px;font-size:13px}
+        .pie-row .cdot{width:9px;height:9px;border-radius:50%;flex:none}
+        .pie-lbl{flex:1;color:var(--text)}
+        .pie-row b{color:var(--text);font-variant-numeric:tabular-nums;font-weight:700}
+        .pie-row em{font-style:normal;color:var(--muted);width:48px;text-align:right;font-variant-numeric:tabular-nums}
+
         .s-h{font-size:18px;font-weight:800;letter-spacing:-0.01em;margin-bottom:4px}
         .s-sub{font-size:12.5px;color:var(--muted);margin-bottom:16px}
+        .s-clean{display:flex;flex-direction:column;gap:1px;margin:-8px 0 16px}
+        .s-clean span{font-size:13px;font-weight:700;color:var(--muted)}
+        .s-clean span.on{color:var(--acc-text)}
+        .s-clean em{font-style:normal;font-size:11px;color:var(--muted);opacity:.75}
         .s-week{display:flex;gap:8px;align-items:flex-end;margin-bottom:20px}
         .s-day{flex:1;text-align:center}
         .s-bar{height:90px;background:var(--track);border-radius:8px;display:flex;align-items:flex-end;overflow:hidden}
@@ -1233,6 +1400,9 @@ function WeekPlanner() {
         .edit-actions{display:flex;gap:8px;justify-content:flex-end}
         .edit-actions .cta{padding:7px 16px;font-size:13px}
         .edit-actions .ghost{padding:7px 14px;font-size:13px}
+        .repeat-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .repeat-lbl{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);font-weight:600;margin-right:2px}
+        .repeat-lbl svg{flex:none}
         .set-note{font-size:12px;color:var(--muted);margin-top:-4px;margin-bottom:10px}
 
         /* Календарь-пикер */
@@ -1347,8 +1517,41 @@ function WeekPlanner() {
             }} />
         ) : view === "stats" ? (
           <section className="card" style={{ marginBottom: 18 }}>
+            {(() => {
+              const daysSince = lastExportAt ? Math.floor((Date.now() - lastExportAt) / 86400000) : null;
+              const shouldRemind = daysSince === null || daysSince >= 30;
+              if (!shouldRemind) return null;
+              return (
+                <div className="export-nudge">
+                  <span>
+                    {daysSince === null
+                      ? "Ты ещё ни разу не сохранял бэкап данных."
+                      : `Последний бэкап — ${daysSince} ${plural(daysSince, "день", "дня", "дней")} назад.`}
+                    {" "}Все данные только на этом устройстве — сделай экспорт перед полугодовым срезом.
+                  </span>
+                  <button className="ghost" onClick={exportData}><I.down /> Экспорт JSON</button>
+                </div>
+              );
+            })()}
+
+            <div className="sv-tabs" role="group" aria-label="Вид статистики">
+              <button className={statsView === "week" ? "on" : ""} onClick={() => setStatsView("week")}>Неделя</button>
+              <button className={statsView === "heatmap" ? "on" : ""} onClick={() => setStatsView("heatmap")}>Теплокарта</button>
+              <button className={statsView === "pie" ? "on" : ""} onClick={() => setStatsView("pie")}>Диаграмма</button>
+            </div>
+
+            {statsView === "heatmap" ? (
+              <Heatmap history={history} todayKey={todayKey} />
+            ) : statsView === "pie" ? (
+              <PieChart catMins={catMins} weekAll={weekAll} />
+            ) : (
+            <>
             <div className="s-h">{streak > 0 ? `Серия: ${streak} ${plural(streak, "день", "дня", "дней")} подряд` : "Серия пока не начата"}</div>
             <div className="s-sub">День засчитывается, когда ты закрываешь его через «Итоги дня». Не прерывай цепочку!</div>
+            <div className="s-clean">
+              <span className={cleanStreak > 0 ? "on" : ""}>{cleanStreak > 0 ? `${cleanStreak} ${plural(cleanStreak, "день", "дня", "дней")} без застреваний` : "Пока без чистых дней"}</span>
+              <em>ни одно дело не упёрлось в лимит переносов</em>
+            </div>
             <div className="s-week">
               {DAY_NAMES.map((n, i) => {
                 const l = days[i] || [];
@@ -1366,7 +1569,7 @@ function WeekPlanner() {
             <div className="s-sub" style={{ marginBottom: 10 }}>Дисциплина</div>
             {(() => {
               const moves = weekAll.reduce((a, t) => a + (t.moves || 0), 0);
-              const stuckW = weekAll.filter((t) => (t.moves || 0) >= STUCK && !t.done).length;
+              const stuckW = weekAll.filter((t) => (t.moves || 0) >= MOVE_LIMIT && !t.done).length;
               const doneW = weekAll.filter((t) => t.done).length;
               const eff = weekAll.length ? Math.round((doneW / weekAll.length) * 100) : 0;
               return (
@@ -1378,11 +1581,40 @@ function WeekPlanner() {
                   </div>
                   <div className="s-sub">
                     {stuckW > 0
-                      ? `${stuckW} ${plural(stuckW, "дело переносится", "дела переносятся", "дел переносятся")} ${STUCK}+ раз. Это не занятость — это избегание. Сделай их первыми завтра.`
+                      ? `${stuckW} ${plural(stuckW, "дело упёрлось", "дела упёрлись", "дел упёрлись")} в предел переносов (${MOVE_LIMIT}). Это не занятость — это избегание. Реши их первыми.`
                       : moves > weekAll.length && weekAll.length > 0
                         ? "Переносов больше, чем дел. План слишком плотный — сократи его, а не себя."
                         : "Ничего не застряло. Так держать."}
                   </div>
+                </>
+              );
+            })()}
+
+            {(() => {
+              const reasonKeys = Object.keys(reasonStats);
+              if (!reasonKeys.length) return null;
+              // Тотал по каждой причине (сумма по всем категориям)
+              const totals = reasonKeys.map((k) => [k, Object.values(reasonStats[k]).reduce((a, b) => a + b, 0)]);
+              // Самая частая связка причина+категория — для честного инсайта, а не общих слов
+              let top = null;
+              reasonKeys.forEach((rk) => {
+                Object.entries(reasonStats[rk]).forEach(([ck, n]) => {
+                  if (!top || n > top.n) top = { rk, ck, n };
+                });
+              });
+              return (
+                <>
+                  <div className="s-sub" style={{ marginBottom: 10, marginTop: 18 }}>Причины переноса</div>
+                  <div className="reason-stats">
+                    {totals.map(([k, n]) => (
+                      <span key={k}>{REASONS[k]} <b>×{n}</b></span>
+                    ))}
+                  </div>
+                  {top && top.n >= 3 && (
+                    <div className="s-sub">
+                      Чаще всего сливаешь «{cat_(top.ck).label}» с причиной «{REASONS[top.rk]}» — {top.n} {plural(top.n, "раз", "раза", "раз")}.
+                    </div>
+                  )}
                 </>
               );
             })()}
@@ -1396,6 +1628,8 @@ function WeekPlanner() {
               </div>
             ))}
             {weekAll.length === 0 && <div className="s-sub">Добавь дела — тут появится аналитика недели.</div>}
+            </>
+            )}
           </section>
         ) : isClosed ? (
           <div className="card closed-card">
@@ -1418,7 +1652,7 @@ function WeekPlanner() {
                 {activeTask && (<>Сейчас: <b>{activeTask.title}</b> — до {fmtTime(activeTask.to, settings.timeFormat)}.</>)}
                 {!activeTask && nextTask && (<>Пауза. Далее: <b>{nextTask.title}</b> в {fmtTime(nextTask.from, settings.timeFormat)}.</>)}
                 {!selIsToday && total > 0 && (dateKey(dayDate(sel)) < todayKey ? "Этот день уже прошёл." : "План на этот день.")}
-                {total === 0 && "Пока пусто. Добавь дело внизу или подтяни события из календаря."}
+                {total === 0 && "Пока пусто. Добавь дело внизу."}
               </div>
               {weekAll.length > 0 && (
                 <div className="weekline">
@@ -1457,14 +1691,23 @@ function WeekPlanner() {
             {loaded && shown.length === 0 && (
               <div className="empty">
                 <b>{total === 0 ? "Чистый лист" : "Ничего с таким ярлыком"}</b>
-                {total === 0 ? "Скажи голосом «с 10 до 11 тренировка» — и дело встанет в расписание." : "Сбрось фильтр, чтобы увидеть весь день."}
+                {total === 0
+                  ? `Здесь появятся твои дела. Перенести можно максимум ${MOVE_LIMIT} раза — дальше дело удаляется, не архивируется. Переносы и незакрытые дела бьют по эффективности: приложение не даёт засиживаться на месте.`
+                  : "Сбрось фильтр, чтобы увидеть весь день."}
+              </div>
+            )}
+
+            {loaded && selIsToday && (
+              <div className="insight">
+                <I.spark />
+                <span>{computeInsight(history, reasonStats, streak, cleanStreak, (dayDate(sel).getDay() + 6) % 7)}</span>
               </div>
             )}
 
             {stuckToday.length > 0 && (
               <div className="nudge">
                 <b>Застряло: {stuckToday.length} {plural(stuckToday.length, "дело", "дела", "дел")}</b>
-                <span>{stuckToday.map((t) => t.title).join(", ")} — переносишь {STUCK}+ раз. Начни с этого, разбей на шаги или удали совсем.</span>
+                <span>{stuckToday.map((t) => t.title).join(", ")} — перенесены максимум раз ({MOVE_LIMIT}). Сделай, разбей на шаги или удали совсем.</span>
               </div>
             )}
 
@@ -1499,7 +1742,7 @@ function WeekPlanner() {
                           {(t.routineId || t.carried || (st === "past" && !t.done)) && (
                             <div className="tbadges">
                               {t.routineId && <span className="badge">повтор</span>}
-                              {(t.moves || 0) >= STUCK
+                              {(t.moves || 0) >= MOVE_LIMIT
                                 ? <span className="badge stuck">переносов ×{t.moves}</span>
                                 : t.carried && <span className="badge">перенос{(t.moves || 0) > 1 ? ` ×${t.moves}` : ""}</span>}
                               {st === "past" && !t.done && <span className="badge late">не закрыто</span>}
@@ -1539,11 +1782,9 @@ function WeekPlanner() {
                                   <button key={i} className={`day-chip ${eDay === i ? "on" : ""}`} onClick={() => setEDay(i)}>{n}</button>
                                 ))}
                               </div>
-                              <div className="edit-row">
-                                <input type="time" value={eFrom} onChange={(ev) => setEFrom(ev.target.value)} aria-label="Начало" />
-                                <span className="sep">—</span>
-                                <input type="time" value={eTo} onChange={(ev) => setETo(ev.target.value)} aria-label="Конец" />
-                              </div>
+                              <button type="button" className="time-trigger" onClick={() => openTimePicker("edit")}>
+                                <I.clock /> {fmtTime(eFrom, settings.timeFormat)} – {fmtTime(eTo, settings.timeFormat)}
+                              </button>
                               <label className="note-field">
                                 <input className="note-in" value={eNote} placeholder="Заметка…" autoFocus={noteFocus}
                                   onChange={(ev) => { const v = ev.target.value; if (noteLen(v) <= NOTE_MAX) setENote(v); }}
@@ -1558,6 +1799,11 @@ function WeekPlanner() {
                                     <span className="cdot" style={{ background: CATS[k].color }} />{CATS[k].label}
                                   </button>
                                 ))}
+                              </div>
+                              <div className="repeat-row">
+                                <span className="repeat-lbl"><I.rep /> Повторить</span>
+                                <button type="button" className="dur-chip" onClick={() => { const d = new Date(dayDate(sel)); d.setDate(d.getDate() + 1); repeatTask(t, d); }}>Завтра</button>
+                                <button type="button" className="dur-chip" onClick={() => { const d = new Date(dayDate(sel)); d.setDate(d.getDate() + 7); repeatTask(t, d); }}>Через неделю</button>
                               </div>
                               <div className="edit-actions">
                                 <button className="ghost" onClick={() => setEditFor(null)}>Отмена</button>
@@ -1615,9 +1861,9 @@ function WeekPlanner() {
               <input ref={inputRef} type="text" placeholder={`Дело на ${DAY_NAMES[sel]}…`} value={title}
                 onChange={(ev) => setTitle(ev.target.value)}
                 onKeyDown={(ev) => ev.key === "Enter" && addTask()} aria-label="Название дела" />
-              <input type="time" value={from} onChange={(ev) => setFrom(ev.target.value)} aria-label="Начало" />
-              <span className="sep">—</span>
-              <input type="time" value={to} onChange={(ev) => setTo(ev.target.value)} aria-label="Конец" />
+              <button type="button" className="time-trigger" onClick={() => openTimePicker("add")}>
+                <I.clock /> {from ? `${fmtTime(from, settings.timeFormat)} – ${fmtTime(to || addMinutes(from, settings.defaultDuration), settings.timeFormat)}` : "Время — авто"}
+              </button>
               <button className={`mic ${listening ? "rec" : ""}`}
                 onClick={listening ? stopVoice : startVoice}
                 aria-label={listening ? "Остановить запись" : "Голосовой ввод"}>
@@ -1685,7 +1931,11 @@ function WeekPlanner() {
                   <div className="r-time">{fmtTime(t.from, settings.timeFormat)} — {fmtTime(t.to, settings.timeFormat)} · {cat_(t.cat).full}</div>
                   <div className="seg">
                     <button className={c === "done" ? "sd" : ""} onClick={() => setReview((r) => ({ choices: { ...r.choices, [t.id]: "done" } }))}>✓ Сделано</button>
-                    <button className={c === "tomorrow" ? "st" : ""} onClick={() => setReview((r) => ({ choices: { ...r.choices, [t.id]: "tomorrow" } }))}>→ {sel < LAST ? "На завтра" : "На Пн"}</button>
+                    {canMove(t) ? (
+                      <button className={c === "tomorrow" ? "st" : ""} onClick={() => setReview((r) => ({ choices: { ...r.choices, [t.id]: "tomorrow" } }))}>→ {sel < LAST ? "На завтра" : "На Пн"}</button>
+                    ) : (
+                      <button className="seg-disabled" disabled title={`Уже переносили ${MOVE_LIMIT} раза — больше нельзя`}>Лимит переносов</button>
+                    )}
                     <button className={c === "drop" ? "sx" : ""} onClick={() => setReview((r) => ({ choices: { ...r.choices, [t.id]: "drop" } }))}>✕ Убрать</button>
                   </div>
                 </div>
@@ -1694,6 +1944,69 @@ function WeekPlanner() {
             <div className="modal-actions">
               <button className="ghost" onClick={() => setReview(null)}>Отмена</button>
               <button className="cta" onClick={confirmReview}>Закрыть день</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {timePicker && (
+        <div className="overlay" role="dialog" aria-modal="true" aria-label="Время" onClick={() => setTimePicker(null)}>
+          <div className="modal tp-modal" tabIndex={-1} ref={(el) => el && el.focus()} onClick={(e) => e.stopPropagation()}>
+            <h2>Когда?</h2>
+            <div className="tp-fields">
+              <label className="tp-field">
+                <span>Начало</span>
+                <input type="time" value={tpFrom} onChange={(ev) => setTpFrom(ev.target.value)} />
+              </label>
+              <label className="tp-field">
+                <span>Конец</span>
+                <input type="time" value={tpTo} onChange={(ev) => setTpTo(ev.target.value)} />
+              </label>
+            </div>
+            <div className="tp-plus">
+              {[15, 30, 60, 90].map((m) => {
+                const curDur = Math.max(0, toMin(tpTo) - toMin(tpFrom));
+                return (
+                  <button key={m} type="button" className="dur-chip" onClick={() => setTpTo(addMinutes(tpFrom, curDur + m))}>
+                    +{m < 60 ? `${m}м` : m === 90 ? "1.5ч" : `${m / 60}ч`}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setTimePicker(null)}>Отмена</button>
+              <button className="cta" onClick={applyTimePicker}>Готово</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {moveFor && (
+        <div className="overlay" role="dialog" aria-modal="true" aria-label="Перенести дело" onClick={() => { setMoveFor(null); setMoveReason(null); }}>
+          <div className="modal ask-modal" tabIndex={-1} ref={(el) => el && el.focus()} onClick={(e) => e.stopPropagation()}>
+            <h2>Перенести «{moveFor.title}»</h2>
+            <div className="sub">Почему? Необязательно, но так статистика честнее.</div>
+            <div className="reason-row">
+              {Object.entries(REASONS).map(([k, lbl]) => (
+                <button key={k} type="button" className={`reason-chip ${moveReason === k ? "on" : ""}`}
+                  onClick={() => setMoveReason(moveReason === k ? null : k)}>{lbl}</button>
+              ))}
+            </div>
+            <div className="sub" style={{ marginTop: 14 }}>Выбери день — перенос считается использованным сразу.</div>
+            <div className="move-days">
+              {Array.from({ length: 7 }, (_, i) => {
+                const base = dayDate(moveFor.fromIdx);
+                const d = new Date(base); d.setDate(d.getDate() + i + 1);
+                const label = i === 0 ? "Завтра" : `${DAY_NAMES[(d.getDay() + 6) % 7]} ${d.getDate()}`;
+                return (
+                  <button key={i} className="move-day" onClick={() => { confirmMove(moveFor, d, moveReason); setMoveReason(null); }}>
+                    <b>{label}</b><span>{MONTHS[d.getMonth()]}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => { setMoveFor(null); setMoveReason(null); }}>Отмена</button>
             </div>
           </div>
         </div>
@@ -1715,9 +2028,16 @@ function WeekPlanner() {
                   Ещё {EXT_MIN} мин (осталось {MAX_EXT - (expired.ext || 0)})
                 </button>
               )}
-              <button className="ghost" onClick={() => { moveToNextDay(expired.id, todayIdx); }}>
-                Не успел — на завтра
-              </button>
+              {canMove(expired) ? (
+                <button className="ghost" onClick={() => {
+                  const t = new Date(dayDate(todayIdx)); t.setDate(t.getDate() + 1);
+                  confirmMove({ id: expired.id, fromIdx: todayIdx }, t, "time");
+                }}>
+                  Не успел — на завтра
+                </button>
+              ) : (
+                <div className="ask-note" style={{ marginTop: 0 }}>Это дело уже переносили {MOVE_LIMIT} раза — дальше только «сделано» или оставить незакрытым.</div>
+              )}
               <button className="linkish" onClick={() => patchTask(expired.id, { asked: true }, todayIdx)}>
                 Не успел, оставить незакрытым
               </button>
@@ -1781,14 +2101,6 @@ function WeekPlanner() {
             <div className="sub">Применяются сразу и хранятся на этом устройстве.</div>
 
             <div className="set-sec">
-              <div className="set-h">Инструменты</div>
-              <div className="danger-row">
-                <button className="ghost" onClick={() => { setShowSettings(false); setShowRoutines(true); }}><I.rep /> Повторы</button>
-                <button className="ghost" onClick={toggleNotif}>{notifOn ? <I.bell /> : <I.bellOff />} {notifOn ? "Увед. вкл" : "Увед. выкл"}</button>
-              </div>
-            </div>
-
-            <div className="set-sec">
               <div className="set-h">Оформление</div>
               <div className="set-row">
                 <span className="lbl">Тема</span>
@@ -1842,16 +2154,6 @@ function WeekPlanner() {
 
             <div className="set-sec">
               <div className="set-h">Уведомления</div>
-              <div className="set-note">Работают, только пока приложение открыто на экране. В фоне или при заблокированном телефоне не придут — это ограничение веб-версии, не баг.</div>
-              <div className="set-row">
-                <span className="lbl">Напоминать за</span>
-                <select className="set-sel" value={settings.notifyLead} onChange={(e) => updateSetting({ notifyLead: Number(e.target.value) })}>
-                  <option value={5}>5 мин</option>
-                  <option value={10}>10 мин</option>
-                  <option value={15}>15 мин</option>
-                  <option value={30}>30 мин</option>
-                </select>
-              </div>
               <div className="set-row">
                 <span className="lbl">Напомнить закрыть день<small>фиксированное время, помимо конца расписания</small></span>
                 <div className="seg2">
@@ -1995,88 +2297,175 @@ function DayGrid({ days, todayIdx, sel, nowMin, dayDate, onPrev, onNext, onOpenC
   );
 }
 
-// ---------- PIN-экран ----------
-// Это защита от чужого взгляда при передаче телефона, а не настоящая security:
-// PIN хранится в localStorage и виден через консоль браузера. Для личного планировщика достаточно.
-const PIN_KEY = "myday:pin";
-const PIN_UNLOCK_KEY = "myday:unlocked";
 
-function PinGate() {
-  const [savedPin, setSavedPin] = useState(() => { try { return localStorage.getItem(PIN_KEY) || ""; } catch (e) { return ""; } });
-  const [unlocked, setUnlocked] = useState(() => { try { return sessionStorage.getItem(PIN_UNLOCK_KEY) === "1"; } catch (e) { return false; } });
-  const [input, setInput] = useState("");
-  const [mode, setMode] = useState(savedPin ? "enter" : "setup"); // 'setup' | 'confirm' | 'enter'
-  const [firstPin, setFirstPin] = useState("");
-  const [err, setErr] = useState("");
+// ---------- Теплокарта серии: 18 недель × 7 дней, цвет по проценту выполнения дня ----------
+// ---------- Живой инсайт дня: одна короткая фраза-наблюдение на основе уже собранных данных ----------
+// Правила проверяются по приоритету — от самого конкретного паттерна к общему факту.
+// Ничего не придумывается: если данных мало, честно говорит об этом, а не подставляет пустое место.
+function computeInsight(history, reasonStats, streak, cleanStreak, todayDow) {
+  const entries = Object.entries(history).filter(([, r]) => r && r.total > 0);
 
-  const press = (d) => {
-    setErr("");
-    if (input.length >= 4) return;
-    const next = input + d;
-    setInput(next);
-    if (next.length !== 4) return;
+  // 1. Заметная чистая серия — сама по себе повод сказать об этом
+  if (cleanStreak >= 3) {
+    return `${cleanStreak}-й день без единого переноса — солидно.`;
+  }
 
-    if (mode === "setup") {
-      setFirstPin(next); setInput(""); setMode("confirm");
-    } else if (mode === "confirm") {
-      if (next === firstPin) {
-        try { localStorage.setItem(PIN_KEY, next); sessionStorage.setItem(PIN_UNLOCK_KEY, "1"); } catch (e) {}
-        setSavedPin(next); setUnlocked(true);
-      } else {
-        setErr("Коды не совпали, начни заново"); setInput(""); setFirstPin(""); setMode("setup");
-      }
-    } else {
-      if (next === savedPin) {
-        try { sessionStorage.setItem(PIN_UNLOCK_KEY, "1"); } catch (e) {}
-        setUnlocked(true);
-      } else {
-        setErr("Неверный код"); setInput("");
-      }
+  // 2. Паттерн по дню недели: сегодняшний день недели заметно хуже или лучше среднего
+  const sameDow = entries.filter(([k]) => ((new Date(k).getDay() + 6) % 7) === todayDow);
+  if (sameDow.length >= 3) {
+    const dowAvg = sameDow.reduce((a, [, r]) => a + r.done / r.total, 0) / sameDow.length;
+    const overallAvg = entries.reduce((a, [, r]) => a + r.done / r.total, 0) / entries.length;
+    const diff = dowAvg - overallAvg;
+    if (diff <= -0.15) {
+      return `По ${DAY_FULL[todayDow] === "среда" ? "средам" : DAY_FULL[todayDow] + "ам"} ты обычно закрываешь день хуже среднего — на ${Math.round(-diff * 100)}%.`;
     }
+    if (diff >= 0.15) {
+      return `${DAY_FULL[todayDow].charAt(0).toUpperCase() + DAY_FULL[todayDow].slice(1)} — обычно твой сильный день: эффективность выше среднего на ${Math.round(diff * 100)}%.`;
+    }
+  }
+
+  // 3. Самая частая связка причина+категория (та же логика, что и в статистике, но как разговорная фраза)
+  const reasonKeys = Object.keys(reasonStats);
+  if (reasonKeys.length) {
+    let top = null;
+    reasonKeys.forEach((rk) => {
+      Object.entries(reasonStats[rk]).forEach(([ck, n]) => {
+        if (!top || n > top.n) top = { rk, ck, n };
+      });
+    });
+    if (top && top.n >= 3) {
+      return `Чаще всего сливаешь «${cat_(top.ck).label}» по причине «${REASONS[top.rk]}» — ${top.n} ${plural(top.n, "раз", "раза", "раз")}.`;
+    }
+  }
+
+  // 4. Просто держащаяся серия — не самый умный инсайт, но честный факт
+  if (streak > 0) {
+    return `Серия держится ${streak} ${plural(streak, "день", "дня", "дней")} подряд.`;
+  }
+
+  // 5. Данных пока мало — так и говорим, не подставляя ничего вымышленного
+  return "Здесь появятся наблюдения о твоих паттернах, как только накопится история за несколько дней.";
+}
+
+function Heatmap({ history, todayKey }) {
+  const WEEKS = 27; // чуть больше полугода — под полугодовые срезки
+  const today = new Date();
+  const monday = mondayOf(today);
+  // Первый понедельник сетки — 17 недель назад от текущей
+  const start = new Date(monday); start.setDate(start.getDate() - (WEEKS - 1) * 7);
+
+  const cellColor = (rec) => {
+    if (!rec || !rec.total) return "var(--track)";     // дня не было / не закрыт
+    const p = rec.done / rec.total;
+    if (p >= 1) return "var(--acc)";
+    if (p >= 0.5) return "var(--acc-45)";
+    if (p > 0) return "var(--acc-22)";
+    return "var(--danger)";                             // закрыт, но 0% — явный пропуск
   };
-  const del = () => setInput((v) => v.slice(0, -1));
 
-  if (unlocked) return <WeekPlanner />;
+  const cols = [];
+  for (let w = 0; w < WEEKS; w++) {
+    const days = [];
+    for (let d = 0; d < 7; d++) {
+      const dt = new Date(start); dt.setDate(dt.getDate() + w * 7 + d);
+      const dk = dateKey(dt);
+      const rec = history[dk];
+      const isFuture = dk > todayKey;
+      days.push({ dk, rec, isFuture, date: dt });
+    }
+    cols.push(days);
+  }
 
-  const title = mode === "setup" ? "Придумай PIN" : mode === "confirm" ? "Повтори PIN" : "Введи PIN";
-  const sub = mode === "setup" ? "4 цифры — защитит приложение от чужого взгляда" : mode === "confirm" ? "Ещё раз, чтобы не ошибиться" : "";
+  const totalDone = Object.values(history).filter((r) => r.total && r.done === r.total).length;
+  const totalTracked = Object.keys(history).length;
 
   return (
-    <div className="pin-screen">
-      <style>{`
-        .pin-screen{min-height:100vh;background:#141416;color:#F5F5F5;display:flex;flex-direction:column;
-          align-items:center;justify-content:center;gap:28px;font-family:'Inter',-apple-system,sans-serif;padding:24px}
-        .pin-title{font-size:20px;font-weight:800;letter-spacing:-0.02em}
-        .pin-sub{font-size:13px;color:#9B9B9E;margin-top:4px;text-align:center;min-height:16px}
-        .pin-err{color:#E8A0A0}
-        .pin-dots{display:flex;gap:14px}
-        .pin-dot{width:14px;height:14px;border-radius:50%;border:1.5px solid #3A3A3F;transition:background .15s,border-color .15s}
-        .pin-dot.on{background:#4F46E5;border-color:#4F46E5}
-        .pin-pad{display:grid;grid-template-columns:repeat(3,72px);gap:14px}
-        .pin-key{width:72px;height:72px;border-radius:50%;background:#1E1E21;border:1px solid #2C2C30;
-          color:#F5F5F5;font-size:24px;font-weight:600;cursor:pointer}
-        .pin-key:active{background:#26262A}
-        .pin-key.ghost{background:none;border:none;color:#9B9B9E;font-size:14px}
-      `}</style>
-      <div style={{ textAlign: "center" }}>
-        <div className="pin-title">{title}</div>
-        <div className={`pin-sub ${err ? "pin-err" : ""}`}>{err || sub}</div>
+    <div className="heatmap">
+      <div className="hm-top">
+        <b>{totalDone}</b><span>из {totalTracked} закрытых дней выполнены полностью</span>
       </div>
-      <div className="pin-dots">
-        {[0, 1, 2, 3].map((i) => <span key={i} className={`pin-dot ${i < input.length ? "on" : ""}`} />)}
+      <div className="hm-scroll">
+        <div className="hm-grid">
+          {cols.map((week, wi) => (
+            <div className="hm-col" key={wi}>
+              {week.map(({ dk, rec, isFuture, date }) => (
+                <div key={dk}
+                  className={`hm-cell ${isFuture ? "hm-future" : ""} ${dk === todayKey ? "hm-today" : ""}`}
+                  style={!isFuture ? { background: cellColor(rec) } : undefined}
+                  title={`${date.getDate()}.${date.getMonth() + 1} — ${rec ? `${rec.done}/${rec.total}` : "нет данных"}`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
-      <div className="pin-pad">
-        {["1","2","3","4","5","6","7","8","9"].map((d) => (
-          <button key={d} className="pin-key" onClick={() => press(d)}>{d}</button>
-        ))}
-        <span />
-        <button className="pin-key" onClick={() => press("0")}>0</button>
-        <button className="pin-key ghost" onClick={del} aria-label="Стереть">⌫</button>
+      <div className="hm-legend">
+        <span>Меньше</span>
+        <i style={{ background: "var(--danger)" }} />
+        <i style={{ background: "var(--track)" }} />
+        <i style={{ background: "var(--acc-22)" }} />
+        <i style={{ background: "var(--acc-45)" }} />
+        <i style={{ background: "var(--acc)" }} />
+        <span>Больше</span>
       </div>
     </div>
   );
 }
 
-export default function App() {
-  return <PinGate />;
+// ---------- Круговая диаграмма: на что уходит время за неделю, по важности ----------
+function PieChart({ catMins, weekAll }) {
+  const total = Object.values(catMins).reduce((a, b) => a + b, 0);
+  const R = 70, CX = 90, CY = 90;
+  const slices = [];
+  let angle = -90; // старт сверху, по часовой
+
+  if (total > 0) {
+    CAT_ORDER.forEach((k) => {
+      const m = catMins[k] || 0;
+      if (!m) return;
+      const frac = m / total;
+      const sweep = frac * 360;
+      const a0 = (angle * Math.PI) / 180;
+      const a1 = ((angle + sweep) * Math.PI) / 180;
+      const x0 = CX + R * Math.cos(a0), y0 = CY + R * Math.sin(a0);
+      const x1 = CX + R * Math.cos(a1), y1 = CY + R * Math.sin(a1);
+      const large = sweep > 180 ? 1 : 0;
+      const isFull = sweep >= 359.9;
+      const d = isFull
+        ? `M ${CX - R} ${CY} A ${R} ${R} 0 1 1 ${CX + R} ${CY} A ${R} ${R} 0 1 1 ${CX - R} ${CY} Z`
+        : `M ${CX} ${CY} L ${x0} ${y0} A ${R} ${R} 0 ${large} 1 ${x1} ${y1} Z`;
+      slices.push({ k, d, m, pct: Math.round(frac * 100) });
+      angle += sweep;
+    });
+  }
+
+  return (
+    <div className="pie-wrap">
+      {total === 0 ? (
+        <div className="s-sub">Добавь дела на неделю — тут появится диаграмма по важности.</div>
+      ) : (
+        <>
+          <svg viewBox="0 0 180 180" className="pie-svg" aria-hidden="true">
+            <circle cx={CX} cy={CY} r={R} fill="var(--track)" />
+            {slices.map((s) => (
+              <path key={s.k} d={s.d} fill={CATS[s.k].color} stroke="var(--bg)" strokeWidth="2" />
+            ))}
+            <circle cx={CX} cy={CY} r={R * 0.56} fill="var(--card)" />
+            <text x={CX} y={CY - 4} textAnchor="middle" className="pie-center-num">{Math.round(total / 60 * 10) / 10}</text>
+            <text x={CX} y={CY + 16} textAnchor="middle" className="pie-center-lbl">часов</text>
+          </svg>
+          <div className="pie-legend">
+            {slices.map((s) => (
+              <div className="pie-row" key={s.k}>
+                <span className="cdot" style={{ background: CATS[s.k].color }} />
+                <span className="pie-lbl">{CATS[s.k].full || CATS[s.k].label}</span>
+                <b>{s.pct}%</b>
+                <em>{Math.round(s.m / 60 * 10) / 10} ч</em>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
