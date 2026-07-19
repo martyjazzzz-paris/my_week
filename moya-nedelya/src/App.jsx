@@ -24,6 +24,7 @@ if (typeof window !== "undefined" && !window.storage) {
 const pad = (n) => String(n).padStart(2, "0");
 const dateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const mondayOf = (d) => { const x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+const parseDateKey = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
 const DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 const DAY_FULL = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"];
 const MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -32,7 +33,6 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
 const toHHMM = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const nowRounded = () => { const d = new Date(); let m = d.getHours() * 60 + d.getMinutes(); m = Math.round(m / 5) * 5; return toHHMM(m % 1440); };
-const addHour = (t) => toHHMM(Math.min(toMin(t) + 60, 23 * 60 + 59));
 const fmtLeft = (m) => m >= 60 ? `${Math.floor(m / 60)} ч ${Math.round(m % 60)} мин` : m >= 1 ? `${Math.round(m)} мин` : "меньше минуты";
 function plural(n, one, few, many) {
   const a = n % 10, b = n % 100;
@@ -82,9 +82,9 @@ const ACCENT_PRESETS = {
 };
 const THEME_PRESETS = {
   dark:  { bg: "#141416", card: "#1E1E21", card2: "#26262A", line: "#2C2C30", text: "#F5F5F5", muted: "#9B9B9E", modal: "#1C1C1F", overlay: "rgba(30,30,33,.92)", track: "#2A2A2E", line2: "#3A3A3F", cs: "dark",
-           glass: "rgba(30,30,33,.55)", glassBrd: "rgba(255,255,255,.10)", sheen: "rgba(255,255,255,.13)" },
+           glass: "rgba(30,30,33,.55)", glassBrd: "rgba(255,255,255,.10)" },
   light: { bg: "#F3F2EE", card: "#FFFFFF", card2: "#EBEAE5", line: "#E1E0DA", text: "#17171A", muted: "#6C6C70", modal: "#FFFFFF", overlay: "rgba(255,255,255,.92)", track: "#E4E3DC", line2: "#C7C6BF", cs: "light",
-           glass: "rgba(255,255,255,.58)", glassBrd: "rgba(255,255,255,.75)", sheen: "rgba(255,255,255,.85)" },
+           glass: "rgba(255,255,255,.58)", glassBrd: "rgba(255,255,255,.75)" },
 };
 const hexToRgba = (hex, a) => {
   const n = parseInt(hex.slice(1), 16);
@@ -147,8 +147,6 @@ const I = {
   cal: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>),
   clock: () => (<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>),
   rep: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 23-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>),
-  bell: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>),
-  bellOff: () => (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.6 3a6 6 0 0 1 9.4 5c0 4 1 6 2 7H9"/><path d="M6 8c0 7-3 9-3 9h11"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><line x1="2" y1="2" x2="22" y2="22"/></svg>),
   mic: () => (<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 19v3"/></svg>),
   stop: () => (<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>),
   list: () => (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4.5" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.3" fill="currentColor" stroke="none"/></svg>),
@@ -216,6 +214,9 @@ export default function WeekPlanner() {
   const [from, setFrom] = useState(nowRounded);   // по умолчанию — сейчас, округлено до 5 мин
   const [to, setTo] = useState("");
   const [cat, setCat] = useState("in");
+  const [repeatMode, setRepeatMode] = useState("none");   // 'none' | 'interval' | 'weekly'
+  const [repeatEvery, setRepeatEvery] = useState(1);       // для 'interval': 1=каждый день, 2=через день...
+  const [repeatDays, setRepeatDays] = useState([0, 1, 2, 3, 4]); // для 'weekly'
   const [listening, setListening] = useState(false);
   const [voiceErr, setVoiceErr] = useState("");
   const recRef = useRef(null);
@@ -299,16 +300,27 @@ export default function WeekPlanner() {
   }, []);
 
   // Разложить повторы по дням недели (только те, что ещё не применены)
-  const applyRoutines = (d, rl, ap, startIdx = 0) => {
+  const applyRoutines = (d, rl, ap, startIdx = 0, weekKey = null) => {
     const dd = { ...d };
     const newApplied = [...ap];
+    const weekMonday = weekKey ? parseDateKey(weekKey) : null;
     rl.forEach((r) => {
       if (newApplied.includes(r.id)) return;
-      (r.days || []).forEach((i) => {
-        if (i < startIdx) return;
+      const push = (i) => {
         dd[i] = [...(dd[i] || []), { id: uid(), routineId: r.id, title: r.title, from: r.from, to: r.to, cat: r.cat, done: false, carried: false }]
           .sort((a, b) => toMin(a.from) - toMin(b.from));
-      });
+      };
+      if (r.kind === "interval" && weekMonday) {
+        // «Каждые N дней» — считаем не по дню недели, а по разнице календарных дат от даты создания
+        const anchor = parseDateKey(r.anchorDate);
+        for (let i = startIdx; i < 7; i++) {
+          const dt = new Date(weekMonday); dt.setDate(dt.getDate() + i);
+          const diff = Math.round((dt - anchor) / 86400000);
+          if (diff >= 0 && diff % r.everyN === 0) push(i);
+        }
+      } else {
+        (r.days || []).forEach((i) => { if (i >= startIdx) push(i); });
+      }
       newApplied.push(r.id);
     });
     return { dd, newApplied };
@@ -319,7 +331,7 @@ export default function WeekPlanner() {
   // Материализуем повторы в неделю, если каких-то ещё нет
   const ensureWeek = (wk, key, rl) => {
     const base = wk || blankWeek();
-    const { dd, newApplied } = applyRoutines({ ...emptyDays(), ...base.days }, rl, base.routinesApplied || []);
+    const { dd, newApplied } = applyRoutines({ ...emptyDays(), ...base.days }, rl, base.routinesApplied || [], 0, key);
     return { days: dd, backlog: base.backlog || [], closed: base.closed || {}, routinesApplied: newApplied };
   };
 
@@ -462,6 +474,32 @@ export default function WeekPlanner() {
     setTitle(""); setFrom(nowRounded()); setTo("");
   };
 
+  // Создание повторяющегося дела: правило идёт в routines[], сразу материализуется
+  // в текущую неделю движком applyRoutines (тем же, что каждую неделю досоздаёт уже существующие повторы).
+  const createRoutine = () => {
+    const name = title.trim();
+    if (!name) return;
+    const f = from || nowRounded();
+    const e = to && toMin(to) > toMin(f) ? to : addMinutes(f, settings.defaultDuration);
+    const r = repeatMode === "interval"
+      ? { id: uid(), title: name, cat, from: f, to: e, kind: "interval", everyN: Math.max(1, repeatEvery), anchorDate: dateKey(dayDate(sel)) }
+      : { id: uid(), title: name, cat, from: f, to: e, kind: "weekly", days: [...repeatDays].sort((a, b) => a - b) };
+    if (r.kind === "weekly" && r.days.length === 0) { showToast("Выбери хотя бы один день недели"); return; }
+    const rl = [...routines, r];
+    const { dd, newApplied } = applyRoutines(days, [r], applied, sel, viewMondayKey);
+    setRoutines(rl); setDays(dd); setApplied(newApplied);
+    persist(dd, backlog, closed, newApplied, rl);
+    setTitle(""); setFrom(nowRounded()); setTo(""); setRepeatMode("none");
+    showToast(`Повтор создан: ${r.kind === "interval" ? (r.everyN === 1 ? "каждый день" : `каждые ${r.everyN} дн.`) : "по дням недели"}`);
+  };
+
+  // Остановить повтор: правило убирается из routines, уже созданные (в том числе прошлые) экземпляры остаются как обычные дела
+  const stopRoutine = (id) => {
+    const rl = routines.filter((r) => r.id !== id);
+    setRoutines(rl); persist(days, backlog, closed, applied, rl);
+    showToast("Повтор остановлен — уже созданные дела остаются");
+  };
+
   const startVoice = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { setVoiceErr("Голосовой ввод не поддерживается в этом браузере"); return; }
@@ -480,15 +518,6 @@ export default function WeekPlanner() {
   const stopVoice = () => { recRef.current && recRef.current.stop(); };
 
   // ---------- Уведомления «через N минут — следующее дело» ----------
-  const toggleNotif = async () => {
-    setImportErr("");
-    if (notifOn) { setNotifOn(false); persist(days, backlog, closed, applied, routines, history, false); return; }
-    if (typeof Notification === "undefined") { setImportErr("Уведомления не поддерживаются в этом окружении (заработают после деплоя на сайт)."); return; }
-    const p = await Notification.requestPermission();
-    if (p !== "granted") { setImportErr("Разрешение на уведомления не выдано."); return; }
-    setNotifOn(true); persist(days, backlog, closed, applied, routines, history, true);
-  };
-
   useEffect(() => {
     if (!notifOn || typeof Notification === "undefined" || Notification.permission !== "granted") return;
     const nm = now.getHours() * 60 + now.getMinutes();
@@ -605,9 +634,11 @@ export default function WeekPlanner() {
   const selIsToday = dateKey(dayDate(sel)) === todayKey;
 
   const list = days[sel] || [];
-  const shown = filter === "all" ? list : list.filter((t) => catKey(t.cat) === filter);
-  const stuckToday = list.filter((t) => (t.moves || 0) >= MOVE_LIMIT && !t.done);
-  const todayList = isCurrentWeek ? (days[todayIdx] || []) : [];
+  const activeList = list.filter((t) => !t.movedAway);
+  const ghostList = list.filter((t) => t.movedAway);
+  const shown = filter === "all" ? activeList : activeList.filter((t) => catKey(t.cat) === filter);
+  const stuckToday = activeList.filter((t) => (t.moves || 0) >= MOVE_LIMIT && !t.done);
+  const todayList = (isCurrentWeek ? (days[todayIdx] || []) : []).filter((t) => !t.movedAway);
   const expired = todayList.find((t) => !t.done && !t.asked && nowMin >= toMin(t.to)) || null;
   const activeTask = selIsToday ? list.find((t) => status(t, sel) === "active") : null;
   const nextTask = selIsToday ? list.find((t) => status(t, sel) === "future") : null;
@@ -618,7 +649,7 @@ export default function WeekPlanner() {
   const total = list.length;
   const doneN = list.filter((t) => t.done).length;
   const pct = total ? Math.round((doneN / total) * 100) : 0;
-  const weekAll = Object.values(days).flat();
+  const weekAll = Object.values(days).flat().filter((t) => !t.movedAway);
 
   // Стрик: подряд закрытые дни (через «Итоги дня»)
   const streak = (() => {
@@ -725,7 +756,10 @@ export default function WeekPlanner() {
     const src = days[fromIdx] || [];
     const t = src.find((x) => x.id === id);
     if (!t) { setMoveFor(null); return; }
-    const rest = src.filter((x) => x.id !== id);
+    // Раньше перенос УДАЛЯЛ дело из исходного дня — из-за этого процент выполнения дня считался
+    // только по оставшимся делам, и день с переносами мог показать 100%, будто ничего и не планировалось.
+    // Теперь дело остаётся в исходном дне «призраком»: не активно, не кликабельно, но учитывается в проценте.
+    const rest = src.map((x) => (x.id === id ? { ...x, movedAway: true } : x));
     const moved = { ...t, done: false, carried: true, asked: false, ext: 0, moves: (t.moves || 0) + 1 };
     const targetWeekKey = dateKey(mondayOf(targetDate));
     const targetDayIdx = (targetDate.getDay() + 6) % 7;
@@ -815,15 +849,18 @@ export default function WeekPlanner() {
   // ---------- Опрос ----------
   const openReview = () => {
     const choices = {};
-    list.forEach((t) => { choices[t.id] = t.done ? "done" : (canMove(t) ? "tomorrow" : "keep"); });
+    activeList.forEach((t) => { choices[t.id] = t.done ? "done" : (canMove(t) ? "tomorrow" : "keep"); });
     setReview({ choices });
   };
   const confirmReview = () => {
-    const stay = [], move = [];
-    list.forEach((t) => {
+    const stay = [...ghostList], move = [];   // уже существующие призраки этого дня остаются как есть
+    activeList.forEach((t) => {
       const c = review.choices[t.id];
       if (c === "done") stay.push({ ...t, done: true });
-      else if (c === "tomorrow" && canMove(t)) move.push({ ...t, done: false, carried: true, moves: (t.moves || 0) + 1 });
+      else if (c === "tomorrow" && canMove(t)) {
+        move.push({ ...t, done: false, carried: true, moves: (t.moves || 0) + 1 });
+        stay.push({ ...t, movedAway: true });   // призрак в исходном дне — для честного процента капсулы
+      }
       else if (c === "drop") { /* явный выбор — не переносим никуда */ }
       else stay.push({ ...t, done: false });   // "keep" (лимит исчерпан) или запасной случай — остаётся как есть, не удаляется
     });
@@ -863,9 +900,8 @@ export default function WeekPlanner() {
     "--text": themeVars.text, "--muted": themeVars.muted, "--modal": themeVars.modal,
     "--overlay": themeVars.overlay, "--cs": themeVars.cs,
     "--track": themeVars.track, "--line2": themeVars.line2,
-    "--glass": themeVars.glass, "--glass-brd": themeVars.glassBrd, "--sheen": themeVars.sheen,
+    "--glass": themeVars.glass, "--glass-brd": themeVars.glassBrd,
     "--acc": accentVars.acc, "--acc2": accentVars.acc2, "--cta-text": accentVars.ctaText, "--acc-text": accTextColor,
-    "--acc-04": hexToRgba(accentVars.acc, .04), "--acc-06": hexToRgba(accentVars.acc, .06),
     "--acc-07": hexToRgba(accentVars.acc, .07), "--acc-08": hexToRgba(accentVars.acc, .08),
     "--acc-10": hexToRgba(accentVars.acc, .10), "--acc-22": hexToRgba(accentVars.acc, .22),
     "--acc-25": hexToRgba(accentVars.acc, .25), "--acc-30": hexToRgba(accentVars.acc, .30),
@@ -891,11 +927,8 @@ export default function WeekPlanner() {
         .eyebrow{color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-top:4px}
         h1{font-weight:800;font-size:clamp(22px,5.5vw,30px);letter-spacing:-0.02em}
         .clock{font-variant-numeric:tabular-nums;color:var(--acc-text);font-weight:700}
-        .note{display:inline-block;margin-top:10px;font-size:13px;color:var(--acc-text);
-          background:var(--acc-08);border:1px solid var(--acc-22);padding:5px 12px;border-radius:99px}
 
         .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}
-        .topbar-r{display:flex;gap:8px;flex:none}
         .icon-btn{width:40px;height:40px;flex:none;display:flex;align-items:center;justify-content:center;
           background:var(--card);border:1px solid var(--line);border-radius:50%;color:var(--text);cursor:pointer;transition:border-color .15s}
         .icon-btn:hover{border-color:var(--line2)}
@@ -918,7 +951,7 @@ export default function WeekPlanner() {
         /* Капсулы-дни в стиле референса */
         .week{display:flex;gap:6px;margin-bottom:16px}
         .day-cap{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:5px;
-          background:var(--card);border:1px solid var(--line);border-radius:999px;
+          background:var(--card);border:1px solid var(--line);border-radius:99px;
           padding:11px 2px;cursor:pointer;transition:border-color .15s,background .15s;color:var(--text);font-family:inherit}
         .day-cap:hover{border-color:var(--line2)}
         /* Прогресс-обводка по контуру: замыкается на 100% */
@@ -946,11 +979,6 @@ export default function WeekPlanner() {
         .day-cap.sel .dc-pct{color:var(--cta-text)}
         .day-cap.sel .dc-ring{color:var(--cta-text)}
 
-        .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--muted);
-          border-top-color:var(--acc);border-radius:50%;animation:sp .8s linear infinite}
-        @keyframes sp{to{transform:rotate(360deg)}}
-        .imp-err{width:100%;font-size:12.5px;color:var(--danger)}
-
         .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px 20px}
         .progress-card{margin-bottom:18px}
         .ptop{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px}
@@ -972,7 +1000,6 @@ export default function WeekPlanner() {
           background:var(--modal);border:1px solid var(--line);border-radius:14px;padding:8px;
           display:flex;flex-wrap:wrap;gap:6px;max-width:320px}
 
-        .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
         .fchip{border:1px solid var(--line);background:var(--card);color:var(--muted);font-family:inherit;
           font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:99px;cursor:pointer;
           transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px}
@@ -980,16 +1007,16 @@ export default function WeekPlanner() {
         .fchip.on{color:var(--text);border-color:var(--acc2);background:var(--card2)}
 
         .banner{display:flex;align-items:center;gap:12px;justify-content:space-between;margin-bottom:20px;
-          padding:13px 15px;border-radius:16px;background:var(--acc-07);
+          padding:13px 15px;border-radius:20px;background:var(--acc-07);
           border:1px solid var(--acc-25);font-size:14px}
         .cta{border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:14px;
-          padding:10px 18px;border-radius:999px;white-space:nowrap;background:var(--acc);color:var(--cta-text);
-          transition:filter .12s,transform .12s}
+          padding:10px 18px;border-radius:99px;white-space:nowrap;background:var(--acc);color:var(--cta-text);
+          transition:filter .15s,transform .15s}
         .cta:hover{filter:brightness(1.06);transform:translateY(-1px)}
         .cta:disabled{opacity:.45;cursor:default}
         .ghost{display:inline-flex;align-items:center;justify-content:center;gap:6px;
           background:var(--card);border:1px solid var(--line);color:var(--muted);font-family:inherit;
-          font-weight:600;font-size:13.5px;padding:8px 14px;border-radius:999px;cursor:pointer;transition:border-color .15s,color .15s}
+          font-weight:600;font-size:13.5px;padding:8px 14px;border-radius:99px;cursor:pointer;transition:border-color .15s,color .15s}
         .ghost:hover{border-color:var(--line2);color:var(--text)}
         .ghost svg,.fchip svg,.mic svg{flex:none;display:block}
         /* Экспорт/Импорт, Повторы/Уведомления — делим ширину ряда поровну между кнопками */
@@ -1003,7 +1030,7 @@ export default function WeekPlanner() {
         /* Время «от–до» в рамке прямо на линии дня */
         .t-frame{position:absolute;left:-74px;top:50%;transform:translateY(-50%);width:64px;z-index:1;
           display:flex;flex-direction:column;align-items:center;gap:2px;
-          background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 3px;
+          background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px 3px;
           font-family:inherit;font-size:11.5px;font-weight:600;color:var(--muted);
           font-variant-numeric:tabular-nums;cursor:pointer;transition:border-color .15s,color .15s}
         .t-frame:hover{border-color:var(--line2);color:var(--text)}
@@ -1011,10 +1038,11 @@ export default function WeekPlanner() {
         .t-frame.on{border-color:var(--acc);color:var(--acc-text)}
         @keyframes pulse{50%{opacity:.45}}
         @media (prefers-reduced-motion:reduce){.mic.rec{animation:none}}
-        .task{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:11px 12px;
-          transition:border-color .2s}
+        .task{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:11px 12px;
+          position:relative;touch-action:pan-y;user-select:none;-webkit-user-select:none;
+          transition:border-color .15s}
         .tbadges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}
-        .tmain{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+        .tmain{flex:1;min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:4px}
 
         /* Редактирование задачи */
         .edit-title{flex:1;min-width:0;background:var(--card2);border:1px solid var(--line);border-radius:10px;
@@ -1025,7 +1053,7 @@ export default function WeekPlanner() {
         .task.active{border-color:var(--acc-45)}
         .task.past:not(.dc){opacity:.65}
         .trow{display:flex;align-items:flex-start;gap:10px}
-        .check{flex:none;width:24px;height:24px;margin-top:1px;border-radius:8px;border:1.5px solid var(--line2);
+        .check{flex:none;width:24px;height:24px;margin-top:1px;border-radius:10px;border:1.5px solid var(--line2);
           background:transparent;cursor:pointer;display:grid;place-items:center;color:#141416;
           font-size:14px;font-weight:800;transition:background .15s,border-color .15s}
         .check.on{background:var(--ok);border-color:var(--ok)}
@@ -1043,19 +1071,17 @@ export default function WeekPlanner() {
           padding:4px 6px;opacity:.5;transition:opacity .15s,color .15s}
         .del:hover{opacity:1;color:var(--danger)}
         /* Свайп по карточке */
-        .swipe-wrap{position:relative;overflow:hidden;border-radius:16px}
+        .swipe-wrap{position:relative;overflow:hidden;border-radius:20px}
         .swipe-bg{position:absolute;inset:0;display:flex;align-items:center;justify-content:space-between;
-          padding:0 16px;border-radius:16px;background:var(--card2);font-size:12.5px;font-weight:700}
+          padding:0 16px;border-radius:20px;background:var(--card2);font-size:12.5px;font-weight:700}
         .sb-l{color:var(--ok)}
         .sb-r{color:var(--stroke)}
-        .task{position:relative;touch-action:pan-y;user-select:none;-webkit-user-select:none}
 
         /* Заметка */
         .note{flex:none;max-width:15.5ch;display:inline-flex;align-items:center;justify-content:center;
           background:var(--card2);border:1px solid var(--line);border-radius:99px;
           padding:3px 10px;font-size:11.5px;color:var(--muted);line-height:1.4;cursor:text;
           white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
-        .tmain{flex-wrap:wrap;row-gap:4px}
         .note-btn{flex:none;width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;
           background:none;border:none;border-radius:50%;color:var(--muted);cursor:pointer;opacity:.5;transition:opacity .15s}
         .note-btn:hover{opacity:1;color:var(--text)}
@@ -1075,15 +1101,15 @@ export default function WeekPlanner() {
 
         /* Антипрокрастинация */
         .nudge{display:flex;flex-direction:column;gap:4px;margin-bottom:16px;padding:12px 15px;
-          border-radius:16px;background:rgba(232,160,160,.06);border:1px solid rgba(232,160,160,.28);font-size:13px}
+          border-radius:20px;background:rgba(232,160,160,.06);border:1px solid rgba(232,160,160,.28);font-size:13px}
         .nudge b{color:var(--danger);font-size:13.5px}
         .nudge span{color:var(--muted);line-height:1.45}
         .insight{display:flex;align-items:flex-start;gap:9px;margin-bottom:16px;padding:12px 15px;
-          border-radius:16px;background:var(--acc-08);border:1px solid var(--acc-22);font-size:13px}
+          border-radius:20px;background:var(--acc-08);border:1px solid var(--acc-22);font-size:13px}
         .insight svg{flex:none;margin-top:1px;color:var(--acc-text)}
         .insight span{color:var(--text);line-height:1.45}
         .export-nudge{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;
-          padding:12px 15px;border-radius:16px;background:var(--card2);border:1px solid var(--line);font-size:12.5px}
+          padding:12px 15px;border-radius:20px;background:var(--card2);border:1px solid var(--line);font-size:12.5px}
         .export-nudge span{flex:1;min-width:180px;color:var(--muted);line-height:1.45}
         .export-nudge .ghost{flex:none;font-size:12.5px;padding:7px 12px}
         .badge.stuck{color:var(--danger);border-color:rgba(232,160,160,.45);background:rgba(232,160,160,.10)}
@@ -1120,7 +1146,7 @@ export default function WeekPlanner() {
         .reason-chip:hover{border-color:var(--line2)}
         .reason-chip.on{background:var(--acc);color:var(--cta-text);border-color:var(--acc)}
         .move-days{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:16px 0}
-        .move-day{background:var(--card2);border:1px solid var(--line);border-radius:12px;
+        .move-day{background:var(--card2);border:1px solid var(--line);border-radius:14px;
           padding:10px 4px;display:flex;flex-direction:column;align-items:center;gap:1px;
           color:var(--text);font-family:inherit;cursor:pointer;transition:border-color .15s}
         .move-day:hover{border-color:var(--acc)}
@@ -1139,6 +1165,14 @@ export default function WeekPlanner() {
         .empty{text-align:center;color:var(--muted);padding:26px 18px;border:1px dashed var(--line);
           border-radius:20px;font-size:13.5px;margin-bottom:16px}
         .empty b{color:var(--text);display:block;margin-bottom:6px;font-size:16px}
+        .ghost-list{margin-bottom:16px}
+        .ghost-h{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;
+          letter-spacing:.04em;margin-bottom:8px;padding-left:2px}
+        .ghost-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+          padding:9px 13px;background:var(--card2);border:1px solid var(--line);border-radius:14px;
+          margin-bottom:6px;opacity:.65}
+        .ghost-title{font-size:13.5px;color:var(--muted);text-decoration:line-through;
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
         .add{width:100%;margin-top:24px;
           display:flex;gap:8px;flex-wrap:wrap;border-radius:20px;padding:10px}
@@ -1149,7 +1183,7 @@ export default function WeekPlanner() {
         .add input[type=text]:focus{outline:none;border-color:var(--acc)}
         .add input[type=text]::placeholder{color:var(--muted)}
         .add input[type=time]{flex:none;background:var(--card2);border:1px solid var(--line);
-          border-radius:12px;color:var(--text);font-family:inherit;font-size:13.5px;padding:8px 8px;color-scheme:var(--cs)}
+          border-radius:14px;color:var(--text);font-family:inherit;font-size:13.5px;padding:8px 8px;color-scheme:var(--cs)}
         .add .sep{align-self:center;color:var(--muted);font-size:13px}
         /* Компактная кнопка-триггер времени в панелях — само окно выбора отдельной модалкой */
         .time-trigger{width:100%;display:flex;align-items:center;gap:8px;
@@ -1164,7 +1198,7 @@ export default function WeekPlanner() {
         .tp-fields{display:flex;gap:10px;margin:16px 0}
         .tp-field{flex:1;display:flex;flex-direction:column;gap:6px}
         .tp-field span{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-        .tp-field input{background:var(--card2);border:1px solid var(--line);border-radius:12px;
+        .tp-field input{background:var(--card2);border:1px solid var(--line);border-radius:14px;
           color:var(--text);font-family:inherit;font-size:22px;font-weight:700;padding:12px 10px;
           text-align:center;font-variant-numeric:tabular-nums;color-scheme:var(--cs)}
         .tp-plus{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
@@ -1173,7 +1207,7 @@ export default function WeekPlanner() {
           transition:border-color .15s,color .15s}
         .dur-chip:hover{border-color:var(--acc);color:var(--acc-text)}
         .mic{flex:none;width:42px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);
-          border-radius:999px;background:var(--card2);color:var(--text);cursor:pointer;transition:border-color .15s}
+          border-radius:99px;background:var(--card2);color:var(--text);cursor:pointer;transition:border-color .15s}
         .mic:hover{border-color:var(--line2)}
         .mic.rec{background:rgba(232,160,160,.15);border-color:var(--danger);color:var(--danger);animation:pulse 1.5s infinite}
         .voice-err{width:100%;font-size:12px;color:var(--danger);padding:0 10px 2px}
@@ -1181,12 +1215,12 @@ export default function WeekPlanner() {
         .overlay{position:fixed;inset:0;background:rgba(10,10,12,.88);
           display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
         .modal{width:100%;max-width:520px;max-height:86vh;overflow:auto;background:var(--modal);
-          border:1px solid var(--line);border-radius:22px;padding:24px}
+          border:1px solid var(--line);border-radius:20px;padding:24px}
         .modal h2{font-size:19px;font-weight:800;letter-spacing:-0.01em;margin-bottom:4px}
         .modal .sub{color:var(--muted);font-size:13.5px;margin-bottom:16px}
         .rv-sum{margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)}
         .rv-tiles{display:flex;gap:8px;margin-bottom:12px}
-        .rv-tile{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px 6px;text-align:center}
+        .rv-tile{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:10px 6px;text-align:center}
         .rv-tile b{display:block;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
         .rv-tile span{font-size:10.5px;color:var(--muted)}
         .rv-tile.warn{border-color:rgba(232,160,160,.4)}
@@ -1209,20 +1243,12 @@ export default function WeekPlanner() {
         .seg .sx{background:rgba(232,160,160,.10);border-color:var(--danger);color:var(--danger)}
         .modal-actions{display:flex;gap:10px;margin-top:18px;justify-content:flex-end}
 
-        .imp-row{display:flex;align-items:flex-start;gap:10px;padding:11px 0;border-top:1px solid var(--line)}
-        .imp-row input{margin-top:4px;accent-color:var(--acc);width:16px;height:16px}
-        .imp-row .it{flex:1}
-        .imp-row .itt{font-size:14.5px;font-weight:600}
-        .imp-row .its{font-size:12.5px;color:var(--muted);margin-top:2px}
-
         .closed-card{text-align:center;padding:36px 22px;margin-bottom:22px}
-        .closed-card .big{font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:4px 0 6px}
+        .closed-card .big{font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:4px 0 6px;font-variant-numeric:tabular-nums}
         .closed-card p{color:var(--muted);font-size:14px;margin-bottom:16px}
         .linkish{background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;
           font-family:inherit;font-size:13px;margin-top:12px}
 
-        /* Сетка недели */
-        /* Нижний тулбар, как в приложениях iOS */
         /* --- Стекло: приближение Liquid Glass. Только на двух поверхностях,
            чтобы не грузить GPU: они не перерисовываются каждую секунду. --- */
         .glass{position:relative;
@@ -1241,11 +1267,11 @@ export default function WeekPlanner() {
         .tabbar{position:fixed;left:50%;transform:translateX(-50%);
           bottom:calc(14px + env(safe-area-inset-bottom, 0px));
           z-index:45;display:flex;align-items:center;gap:4px;
-          padding:7px;border-radius:999px;width:auto;max-width:calc(100% - 28px)}
+          padding:7px;border-radius:99px;width:auto;max-width:calc(100% - 28px)}
         .tabbar button{flex:none;width:52px;height:52px;padding:0;
           display:flex;align-items:center;justify-content:center;
           background:none;border:none;border-radius:50%;cursor:pointer;color:var(--muted);
-          transition:color .2s,background .2s,transform .14s cubic-bezier(.22,1,.36,1)}
+          transition:color .15s,background .15s,transform .14s cubic-bezier(.22,1,.36,1)}
         .tabbar button.on{background:var(--acc);color:var(--cta-text)}
         .tabbar button:active{transform:scale(.9)}
         @media (prefers-reduced-motion:reduce){.tabbar button:active{transform:none}}
@@ -1265,7 +1291,7 @@ export default function WeekPlanner() {
 
         .dg-body{display:flex;gap:0}
         .dg-hours{position:relative;width:46px;flex:none}
-        .dg-hour{position:absolute;right:8px;transform:translateY(-6px);font-size:11px;
+        .dg-hour{position:absolute;right:8px;transform:translateY(-6px);font-size:11px;font-variant-numeric:tabular-nums;
           color:var(--muted);font-variant-numeric:tabular-nums}
         .dg-col{position:relative;flex:1;min-width:0;border-left:1px solid var(--line)}
         .dg-line{position:absolute;left:0;right:0;height:1px;background:var(--line);opacity:.5}
@@ -1331,11 +1357,11 @@ export default function WeekPlanner() {
         .s-clean em{font-style:normal;font-size:11px;color:var(--muted);opacity:.75}
         .s-week{display:flex;gap:8px;align-items:flex-end;margin-bottom:20px}
         .s-day{flex:1;text-align:center}
-        .s-bar{height:90px;background:var(--track);border-radius:8px;display:flex;align-items:flex-end;overflow:hidden}
-        .s-bar i{display:block;width:100%;background:linear-gradient(180deg,var(--acc2),var(--acc));border-radius:8px 8px 0 0;transition:height .5s cubic-bezier(.22,1,.36,1)}
+        .s-bar{height:90px;background:var(--track);border-radius:10px;display:flex;align-items:flex-end;overflow:hidden}
+        .s-bar i{display:block;width:100%;background:linear-gradient(180deg,var(--acc2),var(--acc));border-radius:10px 8px 0 0;transition:height .5s cubic-bezier(.22,1,.36,1)}
         .s-day span{display:block;font-size:11.5px;color:var(--muted);margin-top:5px;font-weight:700}
         .s-day span.s-today{color:var(--acc)}
-        .s-day em{font-style:normal;font-size:10.5px;color:var(--muted)}
+        .s-day em{font-style:normal;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
         .s-cat{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
         .s-cat span{width:100px;flex:none;color:var(--muted);font-weight:600}
         .s-cbar{flex:1;height:10px;border-radius:99px;background:var(--track);overflow:hidden}
@@ -1345,16 +1371,22 @@ export default function WeekPlanner() {
         /* Повторы */
         .r-line{display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
         .r-line .meta{color:var(--muted);font-size:12px;margin-top:2px;font-variant-numeric:tabular-nums}
-        .r-days{display:flex;gap:5px;flex-wrap:wrap;width:100%}
         .r-form{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
         .r-form input[type=text]{flex:1 1 140px;min-width:0;background:var(--card2);border:1px solid var(--line);
-          border-radius:12px;color:var(--text);font-family:inherit;font-size:14px;padding:8px 10px}
+          border-radius:14px;color:var(--text);font-family:inherit;font-size:14px;padding:8px 10px}
         .r-form input[type=text]::placeholder{color:var(--muted)}
-        .r-form input[type=time]{background:var(--card2);border:1px solid var(--line);border-radius:12px;
+        .r-form input[type=time]{background:var(--card2);border:1px solid var(--line);border-radius:14px;
           color:var(--text);font-family:inherit;font-size:13px;padding:8px;color-scheme:var(--cs)}
 
         /* Настройки */
         .set-sec{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+        .routine-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+          padding:10px 0;border-bottom:1px solid var(--line)}
+        .routine-row:last-child{border-bottom:none}
+        .routine-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+        .routine-info b{font-size:14px;font-weight:700;color:var(--text)}
+        .routine-info span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+        .routine-row .ghost{flex:none;padding:6px 12px;font-size:12.5px}
         .set-sec:first-of-type{margin-top:0;padding-top:0;border-top:none}
         .set-h{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px}
         .set-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:14px;flex-wrap:wrap}
@@ -1374,7 +1406,7 @@ export default function WeekPlanner() {
         .time-clear{background:none;border:none;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;padding:0}
         .danger-row{display:flex;gap:8px;flex-wrap:wrap}
         .danger-btn{border:1px solid var(--line);background:var(--card2);color:var(--danger);font-family:inherit;
-          font-weight:600;font-size:13px;padding:8px 14px;border-radius:999px;cursor:pointer;transition:border-color .15s}
+          font-weight:600;font-size:13px;padding:8px 14px;border-radius:99px;cursor:pointer;transition:border-color .15s}
         .danger-btn:hover{border-color:var(--danger)}
         .set-msg{font-size:12.5px;color:var(--acc-text);margin-top:10px}
         .set-ver{font-size:12px;color:var(--muted);margin-top:4px}
@@ -1401,9 +1433,16 @@ export default function WeekPlanner() {
         .edit-actions .cta{padding:7px 16px;font-size:13px}
         .edit-actions .ghost{padding:7px 14px;font-size:13px}
         .repeat-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .repeat-picker{display:flex;gap:5px;flex-wrap:wrap;width:100%}
+        .repeat-n-row{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+        .repeat-days-row{display:flex;gap:4px;width:100%}
+        .repeat-days-row .day-chip{flex:1}
+        .give-up-btn{width:100%;background:none;border:1px dashed rgba(232,160,160,.4);border-radius:14px;
+          color:var(--danger);font-family:inherit;font-size:12.5px;font-weight:600;padding:9px 10px;cursor:pointer;
+          transition:background .15s}
+        .give-up-btn:hover{background:rgba(232,160,160,.08)}
         .repeat-lbl{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);font-weight:600;margin-right:2px}
         .repeat-lbl svg{flex:none}
-        .set-note{font-size:12px;color:var(--muted);margin-top:-4px;margin-bottom:10px}
 
         /* Календарь-пикер */
         .cal-modal{max-width:352px;padding:20px}
@@ -1418,9 +1457,9 @@ export default function WeekPlanner() {
         .cal-cell.empty{visibility:hidden;pointer-events:none}
         /* Полоса текущей недели — сплошная, скруглена только по краям */
         .cal-cell.inweek{background:var(--acc-08)}
-        .cal-cell.inweek.wk-l{border-radius:12px 0 0 12px}
+        .cal-cell.inweek.wk-l{border-radius:14px 0 0 12px}
         .cal-cell.inweek.wk-r{border-radius:0 12px 12px 0}
-        .cal-num{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%;
+        .cal-num{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%;font-variant-numeric:tabular-nums;
           font-variant-numeric:tabular-nums}
         .cal-cell:hover .cal-num{background:var(--card2)}
         .cal-num.today{background:var(--acc);color:var(--cta-text);font-weight:800}
@@ -1690,10 +1729,24 @@ export default function WeekPlanner() {
 
             {loaded && shown.length === 0 && (
               <div className="empty">
-                <b>{total === 0 ? "Чистый лист" : "Ничего с таким ярлыком"}</b>
+                <b>{total === 0 ? "Чистый лист" : ghostList.length > 0 && filter === "all" ? "Всё перенесено" : "Ничего с таким ярлыком"}</b>
                 {total === 0
                   ? `Здесь появятся твои дела. Перенести можно максимум ${MOVE_LIMIT} раза — дальше дело удаляется, не архивируется. Переносы и незакрытые дела бьют по эффективности: приложение не даёт засиживаться на месте.`
-                  : "Сбрось фильтр, чтобы увидеть весь день."}
+                  : ghostList.length > 0 && filter === "all"
+                    ? "Все дела этого дня перенесены на другие дни — ниже видно, куда именно."
+                    : "Сбрось фильтр, чтобы увидеть весь день."}
+              </div>
+            )}
+
+            {ghostList.length > 0 && filter === "all" && (
+              <div className="ghost-list">
+                <div className="ghost-h">Перенесено с этого дня ({ghostList.length})</div>
+                {ghostList.map((t) => (
+                  <div key={t.id} className="ghost-row">
+                    <span className="ghost-title">{t.title}</span>
+                    <span className="badge">перенос{(t.moves || 0) > 1 ? ` ×${t.moves}` : ""}</span>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -1805,6 +1858,12 @@ export default function WeekPlanner() {
                                 <button type="button" className="dur-chip" onClick={() => { const d = new Date(dayDate(sel)); d.setDate(d.getDate() + 1); repeatTask(t, d); }}>Завтра</button>
                                 <button type="button" className="dur-chip" onClick={() => { const d = new Date(dayDate(sel)); d.setDate(d.getDate() + 7); repeatTask(t, d); }}>Через неделю</button>
                               </div>
+                              {!t.done && (
+                                <button type="button" className="give-up-btn"
+                                  onClick={() => { patchTask(t.id, { asked: true }, sel); setEditFor(null); showToast("Закрыто как невыполненное — не дожидаясь конца дня"); }}>
+                                  Не сделаю сегодня — закрыть как невыполненное
+                                </button>
+                              )}
                               <div className="edit-actions">
                                 <button className="ghost" onClick={() => setEditFor(null)}>Отмена</button>
                                 <button className="cta" onClick={saveEdit}>Сохранить</button>
@@ -1864,12 +1923,39 @@ export default function WeekPlanner() {
               <button type="button" className="time-trigger" onClick={() => openTimePicker("add")}>
                 <I.clock /> {from ? `${fmtTime(from, settings.timeFormat)} – ${fmtTime(to || addMinutes(from, settings.defaultDuration), settings.timeFormat)}` : "Время — авто"}
               </button>
+
+              <div className="repeat-picker">
+                <button type="button" className={`fchip ${repeatMode === "none" ? "on" : ""}`} onClick={() => setRepeatMode("none")}>Не повторять</button>
+                <button type="button" className={`fchip ${repeatMode === "interval" && repeatEvery === 1 ? "on" : ""}`} onClick={() => { setRepeatMode("interval"); setRepeatEvery(1); }}>Каждый день</button>
+                <button type="button" className={`fchip ${repeatMode === "interval" && repeatEvery === 2 ? "on" : ""}`} onClick={() => { setRepeatMode("interval"); setRepeatEvery(2); }}>Через день</button>
+                <button type="button" className={`fchip ${repeatMode === "interval" && repeatEvery > 2 ? "on" : ""}`} onClick={() => { setRepeatMode("interval"); setRepeatEvery((v) => (v > 2 ? v : 3)); }}>Каждые N</button>
+                <button type="button" className={`fchip ${repeatMode === "weekly" ? "on" : ""}`} onClick={() => setRepeatMode("weekly")}>По дням недели</button>
+              </div>
+
+              {repeatMode === "interval" && repeatEvery > 2 && (
+                <div className="repeat-n-row">
+                  <button type="button" className="dur-chip" onClick={() => setRepeatEvery((v) => Math.max(3, v - 1))}>−</button>
+                  <span>каждые {repeatEvery} дн.</span>
+                  <button type="button" className="dur-chip" onClick={() => setRepeatEvery((v) => v + 1)}>+</button>
+                </div>
+              )}
+
+              {repeatMode === "weekly" && (
+                <div className="repeat-days-row">
+                  {DAY_NAMES.map((n, i) => (
+                    <button key={i} type="button" className={`day-chip ${repeatDays.includes(i) ? "on" : ""}`}
+                      onClick={() => setRepeatDays((d) => d.includes(i) ? d.filter((x) => x !== i) : [...d, i].sort((a, b) => a - b))}>{n}</button>
+                  ))}
+                </div>
+              )}
               <button className={`mic ${listening ? "rec" : ""}`}
                 onClick={listening ? stopVoice : startVoice}
                 aria-label={listening ? "Остановить запись" : "Голосовой ввод"}>
                 {listening ? <I.stop /> : <I.mic />}
               </button>
-              <button className="cta" onClick={() => addTask()}>Добавить</button>
+              <button className="cta" onClick={() => repeatMode === "none" ? addTask() : createRoutine()}>
+                {repeatMode === "none" ? "Добавить" : "Создать повтор"}
+              </button>
             </div>
           </>
         )}
@@ -1896,9 +1982,9 @@ export default function WeekPlanner() {
             <div className="sub">Сделано, {sel < LAST ? "на завтра" : "на понедельник"} или убрать совсем.</div>
             {(() => {
               const ch = review.choices;
-              const nDone = list.filter((t) => ch[t.id] === "done").length;
-              const nMove = list.filter((t) => ch[t.id] === "tomorrow").length;
-              const nDrop = list.filter((t) => ch[t.id] === "drop").length;
+              const nDone = activeList.filter((t) => ch[t.id] === "done").length;
+              const nMove = activeList.filter((t) => ch[t.id] === "tomorrow").length;
+              const nDrop = activeList.filter((t) => ch[t.id] === "drop").length;
               return (
                 <div className="rv-sum">
                   <div className="rv-tiles">
@@ -1908,7 +1994,7 @@ export default function WeekPlanner() {
                   </div>
                   <div className="rv-mtx">
                     {CAT_ORDER.map((k) => {
-                      const items = list.filter((t) => catKey(t.cat) === k);
+                      const items = activeList.filter((t) => catKey(t.cat) === k);
                       if (!items.length) return null;
                       const d = items.filter((t) => ch[t.id] === "done").length;
                       return (
@@ -1923,7 +2009,7 @@ export default function WeekPlanner() {
                 </div>
               );
             })()}
-            {list.map((t) => {
+            {activeList.map((t) => {
               const c = review.choices[t.id];
               return (
                 <div className="r-item" key={t.id}>
@@ -2100,6 +2186,26 @@ export default function WeekPlanner() {
             <h2>Настройки</h2>
             <div className="sub">Применяются сразу и хранятся на этом устройстве.</div>
 
+            {routines.length > 0 && (
+              <div className="set-sec">
+                <div className="set-h">Повторы</div>
+                {routines.map((r) => (
+                  <div key={r.id} className="routine-row">
+                    <div className="routine-info">
+                      <b>{r.title}</b>
+                      <span>
+                        {r.kind === "interval"
+                          ? (r.everyN === 1 ? "каждый день" : `каждые ${r.everyN} дн.`)
+                          : `по: ${r.days.map((i) => DAY_NAMES[i]).join(", ")}`}
+                        {" · "}{fmtTime(r.from, settings.timeFormat)}
+                      </span>
+                    </div>
+                    <button className="ghost" onClick={() => stopRoutine(r.id)}>Остановить</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="set-sec">
               <div className="set-h">Оформление</div>
               <div className="set-row">
@@ -2194,11 +2300,10 @@ export default function WeekPlanner() {
 }
 
 // ---------- Школьная сетка недели (с перетаскиванием) ----------
-const CAT_LETTER = { iu: "ВС", in: "В", nu: "С", nn: "М" };
 
 function DayGrid({ days, todayIdx, sel, nowMin, dayDate, onPrev, onNext, onOpenCal, onMove, timeFormat }) {
   const H0 = 7, H1 = 23, PX = 56;   // час = 56px: колонка одна, места хватает
-  const list = days[sel] || [];
+  const list = (days[sel] || []).filter((t) => !t.movedAway);
   const height = (H1 - H0) * PX;
   const hours = [];
   for (let h = H0; h < H1; h++) hours.push(h);
