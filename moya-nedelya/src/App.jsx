@@ -1,4 +1,80 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// Publishable-ключ безопасно лежать прямо в коде клиента — это не секрет.
+// Защита данных — на уровне Row Level Security в самой базе (политики "видит только свои строки"),
+// а не в том, что этот ключ где-то спрятан.
+const SUPABASE_URL = "https://abgqxipoeywiivdlibbx.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_5ly8EH2Wp7KZTT7t0R1Skw_x8jmQ66v";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ---------- Облачная синхронизация: push в Supabase поверх localStorage, с очередью на случай оффлайна.
+// Ничего не блокирует — запись на телефон происходит как раньше, мгновенно; облако получает копию
+// в фоне, а если сети нет — попытка сохраняется в очередь и повторяется при появлении связи.
+let currentUserId = null;               // задаётся извне при входе/выходе, вне React-состояния — shim не хук
+const setCloudUser = (id) => { currentUserId = id; };
+const QUEUE_KEY = "myday:syncDirty";
+
+// Собираем все ключи приложения в один JSON и пишем единой строкой в app_state.
+// Схема «одна строка на пользователя» проще и атомарнее, чем множество key/value записей.
+const APP_KEYS = ["myday:v3", "myday:reasons", "myday:lastExport"];
+const collectLocalState = () => {
+  const bundle = {};
+  APP_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v !== null) bundle[k] = v; });
+  return bundle;
+};
+
+const pushOne = async () => {
+  if (!currentUserId) return false;
+  try {
+    const { error } = await supabase.from("app_state").upsert(
+      { user_id: currentUserId, data: collectLocalState(), updated_at: new Date().toISOString() },
+      { onConflict: "user_id" }
+    );
+    return !error;
+  } catch (e) { return false; }
+};
+
+const markDirty = () => { try { localStorage.setItem(QUEUE_KEY, "1"); } catch (e) {} };
+const clearDirty = () => { try { localStorage.removeItem(QUEUE_KEY); } catch (e) {} };
+const isDirty = () => { try { return localStorage.getItem(QUEUE_KEY) === "1"; } catch (e) { return false; } };
+
+const flushQueue = async () => {
+  if (!currentUserId || !isDirty()) return;
+  const ok = await pushOne();
+  if (ok) clearDirty();
+};
+
+const queueCloudPush = () => {
+  // Помечаем «есть изменения» и сразу пробуем отправить; если сети нет — флаг останется до следующей попытки
+  markDirty();
+  pushOne().then((ok) => { if (ok) clearDirty(); });
+};
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", flushQueue);
+  setInterval(flushQueue, 30000);       // на случай если событие 'online' не сработает надёжно в PWA
+}
+
+// Подтягиваем более свежую версию из облака — вызывается один раз сразу после входа,
+// ДО того как человек начал что-либо редактировать в этой сессии. Мы не делаем это
+// постоянно в фоне: тихая перезапись данных прямо во время работы — источник потери правок,
+// а разовая синхронизация при открытии — безопасна и предсказуема.
+const pullFromCloud = async (userId) => {
+  try {
+    const { data, error } = await supabase.from("app_state").select("data,updated_at").eq("user_id", userId).maybeSingle();
+    if (error || !data || !data.data) return;
+    const cloudTime = new Date(data.updated_at).getTime();
+    const localTime = Number(localStorage.getItem("myday:syncedAt") || 0);
+    // Облако новее локального (или локального вовсе нет) — принимаем облачную версию
+    if (cloudTime > localTime) {
+      Object.entries(data.data).forEach(([k, v]) => {
+        localStorage.setItem(k, typeof v === "string" ? v : JSON.stringify(v));
+      });
+      localStorage.setItem("myday:syncedAt", String(cloudTime));
+    }
+  } catch (e) { /* нет сети при входе — просто останемся на локальных данных */ }
+};
 
 // ---------- window.storage: в артефактах Claude это встроенный API, вне них его нет.
 // Здесь — совместимый shim поверх localStorage с тем же интерфейсом (async get/set по ключу),
@@ -14,6 +90,7 @@ if (typeof window !== "undefined" && !window.storage) {
     set: async (key, value) => {
       try {
         localStorage.setItem(key, value);
+        queueCloudPush();
         return { key, value };
       } catch (e) { console.error("localStorage недоступен:", e); return null; }
     },
@@ -164,7 +241,7 @@ const I = {
 };
 
 // ---------- Приложение ----------
-export default function WeekPlanner() {
+function WeekPlanner({ session, onSignOut }) {
   const emptyDays = () => ({ 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] });
   const [days, setDays] = useState(emptyDays());
   const [backlog, setBacklog] = useState([]);
@@ -207,6 +284,16 @@ export default function WeekPlanner() {
   const [timePicker, setTimePicker] = useState(null); // 'add' | 'edit' | null — контекст открытой модалки времени
   const [tpFrom, setTpFrom] = useState("");
   const [tpTo, setTpTo] = useState("");
+  // Начало сдвигает Конец, сохраняя прежнюю длительность блока — иначе легко получить
+  // бессмысленный диапазон вроде «16:00–11:30», если менять только одно поле
+  const onTpFromChange = (val) => {
+    const oldDur = Math.max(15, toMin(tpTo) - toMin(tpFrom));
+    setTpFrom(val);
+    if (toMin(tpTo) <= toMin(val)) setTpTo(addMinutes(val, oldDur));
+  };
+  const onTpToChange = (val) => {
+    setTpTo(toMin(val) > toMin(tpFrom) ? val : addMinutes(tpFrom, 15));
+  };
 
   const [now, setNow] = useState(new Date());
   const [review, setReview] = useState(null);
@@ -784,7 +871,8 @@ export default function WeekPlanner() {
   // или прибавлять готовыми кнопками снизу.
   const openTimePicker = (ctx) => {
     const f = ctx === "add" ? (from || nowRounded()) : (eFrom || nowRounded());
-    const t = ctx === "add" ? (to || addMinutes(f, 60)) : (eTo || addMinutes(f, 60));
+    let t = ctx === "add" ? (to || addMinutes(f, 60)) : (eTo || addMinutes(f, 60));
+    if (toMin(t) <= toMin(f)) t = addMinutes(f, 60);   // защита от уже сохранённого «конец раньше начала»
     setTpFrom(f); setTpTo(t); setTimePicker(ctx);
   };
   const applyTimePicker = () => {
@@ -1380,6 +1468,10 @@ export default function WeekPlanner() {
 
         /* Настройки */
         .set-sec{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+        .set-note{font-size:12px;color:var(--muted);margin-top:-4px;margin-bottom:10px;line-height:1.5}
+        .account-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+        .account-row span{font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .account-row .ghost{flex:none;padding:6px 12px;font-size:12.5px}
         .routine-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
           padding:10px 0;border-bottom:1px solid var(--line)}
         .routine-row:last-child{border-bottom:none}
@@ -2036,17 +2128,17 @@ export default function WeekPlanner() {
       )}
 
       {timePicker && (
-        <div className="overlay" role="dialog" aria-modal="true" aria-label="Время" onClick={() => setTimePicker(null)}>
-          <div className="modal tp-modal" tabIndex={-1} ref={(el) => el && el.focus()} onClick={(e) => e.stopPropagation()}>
+        <div className="overlay" role="dialog" aria-modal="true" aria-label="Время">
+          <div className="modal tp-modal" tabIndex={-1} ref={(el) => el && el.focus()}>
             <h2>Когда?</h2>
             <div className="tp-fields">
               <label className="tp-field">
                 <span>Начало</span>
-                <input type="time" value={tpFrom} onChange={(ev) => setTpFrom(ev.target.value)} />
+                <input type="time" value={tpFrom} onChange={(ev) => onTpFromChange(ev.target.value)} />
               </label>
               <label className="tp-field">
                 <span>Конец</span>
-                <input type="time" value={tpTo} onChange={(ev) => setTpTo(ev.target.value)} />
+                <input type="time" value={tpTo} onChange={(ev) => onTpToChange(ev.target.value)} />
               </label>
             </div>
             <div className="tp-plus">
@@ -2267,6 +2359,15 @@ export default function WeekPlanner() {
                   {settings.reviewTime && <button className="time-clear" onClick={() => updateSetting({ reviewTime: "" })}>выкл</button>}
                 </div>
               </div>
+            </div>
+
+            <div className="set-sec">
+              <div className="set-h">Аккаунт</div>
+              <div className="account-row">
+                <span>{session?.user?.email}</span>
+                <button className="ghost" onClick={onSignOut}>Выйти</button>
+              </div>
+              <div className="set-note">Данные синхронизируются с облаком автоматически, в том числе без сети — отправятся, как только появится связь.</div>
             </div>
 
             <div className="set-sec">
@@ -2573,4 +2674,122 @@ function PieChart({ catMins, weekAll }) {
       )}
     </div>
   );
+}
+
+// ---------- Экран входа: почта + пароль, переключение вход/регистрация ----------
+function AuthScreen({ onSignedIn }) {
+  const [mode, setMode] = useState("login"); // 'login' | 'signup'
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [info, setInfo] = useState("");
+
+  const submit = async () => {
+    setErr(""); setInfo("");
+    if (!email.trim() || !password) { setErr("Заполни почту и пароль."); return; }
+    if (password.length < 6) { setErr("Пароль — минимум 6 символов."); return; }
+    setBusy(true);
+    try {
+      if (mode === "login") {
+        const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (error) { setErr("Не удалось войти: " + error.message); return; }
+        onSignedIn(data.session);
+      } else {
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+        if (error) { setErr("Не удалось зарегистрироваться: " + error.message); return; }
+        if (data.session) onSignedIn(data.session);
+        else setInfo("Проверь почту — нужно подтвердить адрес, потом сможешь войти.");
+      }
+    } finally { setBusy(false); }
+  };
+
+  // Экран входа рендерится ДО того, как WeekPlanner успевает вычислить переменные темы
+  // (тема хранится в настройках самого приложения, а до входа их ещё неоткуда взять).
+  // Поэтому здесь — явные значения по умолчанию: тёмная тема, акцент-вермильон.
+  const authVars = {
+    "--bg": "#141416", "--card": "#1E1E21", "--card2": "#26262A", "--line": "#2C2C30",
+    "--text": "#F5F5F5", "--muted": "#9B9B9E", "--cs": "dark",
+    "--acc": "#EC4E20", "--cta-text": "#FFFFFF", "--acc-text": "#FF7A55",
+    "--acc-07": "rgba(236,78,32,.07)", "--acc-08": "rgba(236,78,32,.08)",
+    "--danger": "#E8A0A0",
+  };
+  return (
+    <div className="app" style={authVars}>
+      <div className="shell auth-shell">
+        <h1>Моя неделя</h1>
+        <div className="eyebrow">{mode === "login" ? "Вход" : "Регистрация"}</div>
+        <div className="card auth-card">
+          <input className="auth-input" type="email" placeholder="Почта" value={email}
+            onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" autoCorrect="off" />
+          <input className="auth-input" type="password" placeholder="Пароль (минимум 6 символов)" value={password}
+            onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+          {err && <div className="auth-err">{err}</div>}
+          {info && <div className="auth-info">{info}</div>}
+          <button className="cta auth-submit" onClick={submit} disabled={busy}>
+            {busy ? "…" : mode === "login" ? "Войти" : "Создать аккаунт"}
+          </button>
+          <button className="linkish" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setErr(""); setInfo(""); }}>
+            {mode === "login" ? "Нет аккаунта? Зарегистрироваться" : "Уже есть аккаунт? Войти"}
+          </button>
+        </div>
+        <div className="auth-note">Данные привязываются к аккаунту и синхронизируются между устройствами. Работает и без сети — просто отправится в облако, как только появится связь.</div>
+      </div>
+      <style>{`
+        .app{min-height:100vh;color:var(--text);background:var(--bg);
+          font-family:'Inter',-apple-system,sans-serif;display:flex;justify-content:center;
+          padding:calc(26px + env(safe-area-inset-top, 0px)) 14px 40px}
+        .shell{width:100%;max-width:600px}
+        .eyebrow{color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-top:4px}
+        h1{font-weight:800;font-size:clamp(22px,5.5vw,30px);letter-spacing:-0.02em;margin:0}
+        .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px 20px}
+        .cta{border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:14px;
+          padding:10px 18px;border-radius:99px;white-space:nowrap;background:var(--acc);color:var(--cta-text);
+          transition:filter .15s,transform .15s}
+        .cta:hover{filter:brightness(1.06);transform:translateY(-1px)}
+        .cta:disabled{opacity:.45;cursor:default}
+        .linkish{background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;
+          font-family:inherit;font-size:13px;margin-top:12px}
+        .auth-shell{display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:14vh}
+        .auth-card{width:100%;max-width:340px;margin-top:20px;display:flex;flex-direction:column;gap:10px;text-align:left}
+        .auth-input{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:14px;
+          color:var(--text);font-family:inherit;font-size:15px;padding:12px 14px}
+        .auth-submit{width:100%;padding:12px;font-size:15px;margin-top:4px}
+        .auth-err{font-size:12.5px;color:var(--danger)}
+        .auth-info{font-size:12.5px;color:var(--acc-text)}
+        .auth-note{max-width:320px;margin-top:18px;font-size:12px;color:var(--muted);line-height:1.5}
+      `}</style>
+    </div>
+  );
+}
+
+// ---------- Точка входа: показывает экран входа, пока нет сессии; при появлении сессии —
+// подтягивает более свежие данные из облака (если есть) и показывает само приложение ----------
+export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = ещё проверяем, null = нет сессии
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session) {
+        setCloudUser(data.session.user.id);
+        await pullFromCloud(data.session.user.id);
+      }
+      setSession(data.session || null);
+      setReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setCloudUser(s ? s.user.id : null);
+      setSession(s);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (!ready) return <div style={{ minHeight: "100vh", background: "#141416" }} />;
+  if (!session) return <AuthScreen onSignedIn={async (s) => {
+    setCloudUser(s.user.id);
+    await pullFromCloud(s.user.id);   // важно: подтянуть облако ДО показа приложения при первом входе
+    setSession(s);
+  }} />;
+  return <WeekPlanner session={session} onSignOut={() => supabase.auth.signOut()} />;
 }
