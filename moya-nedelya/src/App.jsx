@@ -2129,17 +2129,17 @@ function WeekPlanner({ session, onSignOut }) {
 
       {timePicker && (
         <div className="overlay" role="dialog" aria-modal="true" aria-label="Время">
-          <div className="modal tp-modal" tabIndex={-1} ref={(el) => el && el.focus()}>
+          <div className="modal tp-modal">
             <h2>Когда?</h2>
             <div className="tp-fields">
-              <label className="tp-field">
+              <div className="tp-field">
                 <span>Начало</span>
                 <input type="time" value={tpFrom} onChange={(ev) => onTpFromChange(ev.target.value)} />
-              </label>
-              <label className="tp-field">
+              </div>
+              <div className="tp-field">
                 <span>Конец</span>
                 <input type="time" value={tpTo} onChange={(ev) => onTpToChange(ev.target.value)} />
-              </label>
+              </div>
             </div>
             <div className="tp-plus">
               {[15, 30, 60, 90].map((m) => {
